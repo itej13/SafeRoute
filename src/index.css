@@ -1,0 +1,104 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    box-sizing: border-box;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  html, body, #root {
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    font-family: 'Inter', system-ui, sans-serif;
+    background-color: #F1FAEE;
+    color: #1D3557;
+  }
+}
+
+@layer utilities {
+  .safe-area-bottom {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+}
+
+/* Leaflet overrides */
+.leaflet-container {
+  height: 100%;
+  width: 100%;
+  font-family: 'Inter', system-ui, sans-serif;
+}
+
+.leaflet-control-zoom {
+  border: none !important;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.15) !important;
+}
+
+.leaflet-control-zoom a {
+  width: 36px !important;
+  height: 36px !important;
+  line-height: 36px !important;
+  font-size: 18px !important;
+  border-radius: 8px !important;
+}
+
+/* Bottom sheet */
+.bottom-sheet {
+  transition: transform 0.35s cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.bottom-sheet-hidden {
+  transform: translateY(100%);
+}
+
+.bottom-sheet-visible {
+  transform: translateY(0);
+}
+
+/* SOS pulse animation */
+@keyframes sos-pulse {
+  0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(230, 57, 70, 0.5); }
+  50% { transform: scale(1.08); box-shadow: 0 0 0 12px rgba(230, 57, 70, 0); }
+}
+
+.sos-pulse {
+  animation: sos-pulse 1.8s ease-in-out infinite;
+}
+
+/* SOS page ring animation */
+@keyframes ring-pulse {
+  0% { transform: scale(1); opacity: 0.8; }
+  100% { transform: scale(1.6); opacity: 0; }
+}
+
+.ring-pulse {
+  animation: ring-pulse 1.8s ease-out infinite;
+}
+
+/* Slider styling */
+input[type='range'] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  border-radius: 3px;
+  outline: none;
+  cursor: pointer;
+}
+
+input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #1D3557;
+  cursor: pointer;
+  border: 2px solid white;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+}
+
+/* Scrollbar hide */
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
