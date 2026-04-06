@@ -69,8 +69,10 @@ function SearchBar({ onLocationSelected }: SearchBarProps) {
     debounceRef.current = setTimeout(async () => {
       setLoading(true)
       try {
+        const bounds = map.getBounds()
+        const viewbox = `${bounds.getWest()},${bounds.getNorth()},${bounds.getEast()},${bounds.getSouth()}`
         const res = await fetch(
-          `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=5`,
+          `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=5&viewbox=${viewbox}&bounded=0`,
           { headers: { 'Accept-Language': 'en' } }
         )
         const data: NominatimResult[] = await res.json()
@@ -84,6 +86,14 @@ function SearchBar({ onLocationSelected }: SearchBarProps) {
     }, 320)
     return () => clearTimeout(debounceRef.current)
   }, [query])
+
+  // Prevent Leaflet map click events when interacting with search UI
+  useEffect(() => {
+    if (containerRef.current) {
+      L.DomEvent.disableClickPropagation(containerRef.current)
+      L.DomEvent.disableScrollPropagation(containerRef.current)
+    }
+  }, [])
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -186,7 +196,7 @@ function RoutesFAB({ onClick }: { onClick: () => void }) {
   return (
     <button
       onClick={onClick}
-      className="fixed bottom-36 right-4 z-[999] w-14 h-14 bg-secondary text-white rounded-full shadow-xl flex flex-col items-center justify-center gap-0.5 active:scale-95 transition-transform"
+      className="fixed bottom-44 right-4 z-[999] w-14 h-14 bg-secondary text-white rounded-full shadow-xl flex flex-col items-center justify-center gap-0.5 active:scale-95 transition-transform"
       aria-label="Compare routes"
     >
       <svg viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5">
