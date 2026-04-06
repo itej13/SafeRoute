@@ -1,9 +1,12 @@
 import { useEffect, useRef } from 'react'
 import { useMap } from 'react-leaflet'
 import L from 'leaflet'
-import 'leaflet.heat'
 import { supabase } from '../lib/supabase'
-import type { HeatLatLngTuple } from 'leaflet.heat'
+
+type HeatLayerInstance = L.Layer & {
+  setLatLngs: (pts: [number, number, number][]) => void
+  redraw: () => void
+}
 
 interface Props {
   refreshKey: number
@@ -11,45 +14,50 @@ interface Props {
 
 export default function HeatmapLayer({ refreshKey }: Props) {
   const map = useMap()
-  const heatRef = useRef<ReturnType<typeof import('leaflet.heat')['heatLayer']> | null>(null)
+  const heatRef = useRef<HeatLayerInstance | null>(null)
+  const loadedRef = useRef(false)
 
   useEffect(() => {
     let cancelled = false
 
     async function load() {
+      // Load leaflet.heat once — it attaches L.heatLayer as a side-effect
+      if (!loadedRef.current) {
+        await import('leaflet.heat')
+        loadedRef.current = true
+      }
+
       const { data, error } = await supabase
         .from('ratings')
         .select('lat, lng, safety_score')
 
       if (cancelled || error || !data) return
 
-      const points: HeatLatLngTuple[] = data.map(r => [
+      const points: [number, number, number][] = data.map(r => [
         r.lat,
         r.lng,
-        // Invert score: low safety = high heat intensity (red), high safety = low (green)
-        (6 - r.safety_score) / 5,
+        (6 - r.safety_score) / 5, // invert: low safety = high intensity (red)
       ])
 
-      const { heatLayer } = await import('leaflet.heat')
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const lHeat = (L as any).heatLayer
 
       if (heatRef.current) {
-        map.removeLayer(heatRef.current as unknown as L.Layer)
+        map.removeLayer(heatRef.current)
       }
 
-      heatRef.current = heatLayer(points, {
+      heatRef.current = lHeat(points, {
         radius: 35,
         blur: 25,
         maxZoom: 17,
         max: 1.0,
         gradient: {
-          0.0: '#2A9D8F',  // safe — green
-          0.4: '#e9c46a',  // moderate — yellow
-          0.7: '#f4a261',  // warning — orange
-          1.0: '#E63946',  // danger — red
+          0.0: '#2A9D8F',
+          0.4: '#e9c46a',
+          0.7: '#f4a261',
+          1.0: '#E63946',
         },
-      })
-
-      heatRef.current.addTo(map)
+      }).addTo(map)
     }
 
     load()
@@ -57,7 +65,7 @@ export default function HeatmapLayer({ refreshKey }: Props) {
     return () => {
       cancelled = true
       if (heatRef.current) {
-        map.removeLayer(heatRef.current as unknown as L.Layer)
+        map.removeLayer(heatRef.current)
         heatRef.current = null
       }
     }
