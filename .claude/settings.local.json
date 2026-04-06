@@ -4,7 +4,18 @@
       "Bash(npm create:*)",
       "Bash(npm install:*)",
       "Bash(npx tsc:*)",
-      "Bash(npm run:*)"
+      "Bash(npm run:*)",
+      "Bash(open http://localhost:5173)",
+      "Bash(supabase --version)",
+      "Bash(open:*)",
+      "mcp__code-review-graph__list_graph_stats_tool",
+      "mcp__code-review-graph__build_or_update_graph_tool",
+      "mcp__code-review-graph__embed_graph_tool",
+      "Bash(pip install:*)",
+      "Bash(gh repo:*)",
+      "mcp__code-review-graph__get_architecture_overview_tool",
+      "mcp__code-review-graph__list_flows_tool",
+      "mcp__code-review-graph__list_communities_tool"
     ]
   },
   "enableAllProjectMcpServers": true,
