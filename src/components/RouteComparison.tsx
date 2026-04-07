@@ -74,22 +74,26 @@ function DestSearch({ onSelect, mapCenter }: DestSearchProps) {
 
   useEffect(() => {
     clearTimeout(debounceRef.current)
-    if (query.length < 3) { setResults([]); return }
+    if (query.length < 2) { setResults([]); return }
     debounceRef.current = setTimeout(async () => {
       setLoading(true)
       try {
         const [clat, clng] = mapCenter
-        const delta = 0.5
-        const viewbox = `${clng - delta},${clat + delta},${clng + delta},${clat - delta}`
         const res = await fetch(
-          `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=5&viewbox=${viewbox}&bounded=0`,
-          { headers: { 'Accept-Language': 'en' } }
+          `https://photon.komoot.io/api/?q=${encodeURIComponent(query)}&limit=5&lat=${clat}&lon=${clng}&lang=en`
         )
-        setResults(await res.json())
+        const json = await res.json()
+        const data: NominatimResult[] = (json.features ?? []).map((f: { properties: Record<string, string>; geometry: { coordinates: [number, number] } }) => ({
+          place_id: Number(f.properties.osm_id) || Math.floor(Math.random() * 1e9),
+          display_name: [f.properties.name, f.properties.street, f.properties.city || f.properties.district, f.properties.state, f.properties.country].filter(Boolean).join(', '),
+          lat: String(f.geometry.coordinates[1]),
+          lon: String(f.geometry.coordinates[0]),
+        }))
+        setResults(data)
       } finally {
         setLoading(false)
       }
-    }, 350)
+    }, 250)
     return () => clearTimeout(debounceRef.current)
   }, [query, mapCenter])
 
@@ -195,7 +199,7 @@ export default function RouteComparisonSheet({
           const url =
             `https://router.project-osrm.org/route/v1/driving/` +
             `${oLng},${oLat};${destLng},${destLat}` +
-            `?alternatives=true&overview=full&geometries=geojson`
+            `?alternatives=3&overview=full&geometries=geojson`
 
           const res  = await fetch(url)
           const json = await res.json()

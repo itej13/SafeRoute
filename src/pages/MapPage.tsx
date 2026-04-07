@@ -20,7 +20,13 @@ const DTU_CENTER: [number, number] = [28.7501, 77.1177]
 // ── Map click handler ─────────────────────────────────────────────────────────
 
 function ClickHandler({ onMapClick }: { onMapClick: (lat: number, lng: number) => void }) {
-  useMapEvents({ click(e) { onMapClick(e.latlng.lat, e.latlng.lng) } })
+  useMapEvents({
+    click(e) {
+      const target = (e.originalEvent?.target as HTMLElement)
+      if (target?.closest('[data-no-map-click]')) return
+      onMapClick(e.latlng.lat, e.latlng.lng)
+    },
+  })
   return null
 }
 
@@ -62,20 +68,24 @@ function SearchBar({ onLocationSelected }: SearchBarProps) {
   const debounceRef = useRef<ReturnType<typeof setTimeout>>()
   const containerRef = useRef<HTMLDivElement>(null)
 
-  // Debounced Nominatim search — 5 results
+  // Debounced Photon geocoder — fuzzy, proximity-biased
   useEffect(() => {
     clearTimeout(debounceRef.current)
-    if (query.length < 3) { setResults([]); setOpen(false); return }
+    if (query.length < 2) { setResults([]); setOpen(false); return }
     debounceRef.current = setTimeout(async () => {
       setLoading(true)
       try {
-        const bounds = map.getBounds()
-        const viewbox = `${bounds.getWest()},${bounds.getNorth()},${bounds.getEast()},${bounds.getSouth()}`
+        const center = map.getCenter()
         const res = await fetch(
-          `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=5&viewbox=${viewbox}&bounded=0`,
-          { headers: { 'Accept-Language': 'en' } }
+          `https://photon.komoot.io/api/?q=${encodeURIComponent(query)}&limit=5&lat=${center.lat}&lon=${center.lng}&lang=en`
         )
-        const data: NominatimResult[] = await res.json()
+        const json = await res.json()
+        const data: NominatimResult[] = (json.features ?? []).map((f: { properties: Record<string, string>; geometry: { coordinates: [number, number] } }) => ({
+          place_id: Number(f.properties.osm_id) || Math.floor(Math.random() * 1e9),
+          display_name: [f.properties.name, f.properties.street, f.properties.city || f.properties.district, f.properties.state, f.properties.country].filter(Boolean).join(', '),
+          lat: String(f.geometry.coordinates[1]),
+          lon: String(f.geometry.coordinates[0]),
+        }))
         setResults(data)
         setOpen(data.length > 0)
       } catch {
@@ -83,14 +93,13 @@ function SearchBar({ onLocationSelected }: SearchBarProps) {
       } finally {
         setLoading(false)
       }
-    }, 320)
+    }, 250)
     return () => clearTimeout(debounceRef.current)
   }, [query])
 
-  // Prevent Leaflet map click events when interacting with search UI
+  // Prevent map zoom when scrolling inside the dropdown
   useEffect(() => {
     if (containerRef.current) {
-      L.DomEvent.disableClickPropagation(containerRef.current)
       L.DomEvent.disableScrollPropagation(containerRef.current)
     }
   }, [])
@@ -127,7 +136,7 @@ function SearchBar({ onLocationSelected }: SearchBarProps) {
     <div
       ref={containerRef}
       className="absolute top-4 left-4 right-4 z-[1000]"
-      onClick={e => e.stopPropagation()}
+      data-no-map-click
     >
       {/* Input row */}
       <div className="flex gap-2">
@@ -172,7 +181,7 @@ function SearchBar({ onLocationSelected }: SearchBarProps) {
           {results.map(r => (
             <li key={r.place_id}>
               <button
-                onMouseDown={e => { e.preventDefault(); selectResult(r) }}
+                onClick={() => selectResult(r)}
                 className="w-full text-left px-4 py-3 hover:bg-gray-50 active:bg-gray-100 border-b border-gray-50 last:border-0 transition-colors"
               >
                 <p className="text-sm font-medium text-secondary truncate">
