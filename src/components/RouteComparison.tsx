@@ -4,7 +4,15 @@ import { supabase } from '../lib/supabase'
 import { haversine, formatDistance, formatWalkTime, getBoundingBox } from '../lib/geo'
 import type { NominatimResult, RouteData } from '../lib/types'
 
-const ROUTE_COLORS = ['#457B9D', '#2A9D8F', '#f4a261']
+const VIBRANT_COLORS = [
+  '#FF4757', '#2ED573', '#1E90FF', '#FF6348',
+  '#A29BFE', '#FD79A8', '#00CEC9', '#FDCB6E',
+  '#6C5CE7', '#26de81',
+]
+
+function pickColors(count: number): string[] {
+  return [...VIBRANT_COLORS].sort(() => Math.random() - 0.5).slice(0, count)
+}
 
 // ── Polylines drawn inside MapContainer ──────────────────────────────────────
 
@@ -21,8 +29,8 @@ export function RoutePolylines({ routes, activeIndex }: RoutePolylinesProps) {
           key={route.index}
           positions={route.coordinates.map(([lng, lat]) => [lat, lng] as [number, number])}
           color={route.color}
-          weight={activeIndex === route.index ? 6 : 3}
-          opacity={activeIndex === null || activeIndex === route.index ? 0.85 : 0.25}
+          weight={activeIndex === route.index ? 7 : 4}
+          opacity={activeIndex === null || activeIndex === route.index ? 0.92 : 0.28}
         />
       ))}
     </>
@@ -43,13 +51,10 @@ async function scoreRoute(coordinates: [number, number][]): Promise<number> {
 
   if (!data || data.length === 0) return 3
 
-  // Sample every 8th coordinate to keep it fast
   const samples = coordinates.filter((_, i) => i % 8 === 0)
-
   const nearby = data.filter(r =>
     samples.some(([lng, lat]) => haversine(lat, lng, r.lat, r.lng) < 0.18)
   )
-
   if (nearby.length === 0) return 3
   return nearby.reduce((sum, r) => sum + r.safety_score, 0) / nearby.length
 }
@@ -58,14 +63,14 @@ async function scoreRoute(coordinates: [number, number][]): Promise<number> {
 
 interface DestSearchProps {
   onSelect: (r: NominatimResult) => void
+  mapCenter: [number, number]
 }
 
-function DestSearch({ onSelect }: DestSearchProps) {
+function DestSearch({ onSelect, mapCenter }: DestSearchProps) {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<NominatimResult[]>([])
   const [loading, setLoading] = useState(false)
   const debounceRef = useRef<ReturnType<typeof setTimeout>>()
-  const containerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     clearTimeout(debounceRef.current)
@@ -73,8 +78,11 @@ function DestSearch({ onSelect }: DestSearchProps) {
     debounceRef.current = setTimeout(async () => {
       setLoading(true)
       try {
+        const [clat, clng] = mapCenter
+        const delta = 0.5
+        const viewbox = `${clng - delta},${clat + delta},${clng + delta},${clat - delta}`
         const res = await fetch(
-          `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=5`,
+          `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=5&viewbox=${viewbox}&bounded=0`,
           { headers: { 'Accept-Language': 'en' } }
         )
         setResults(await res.json())
@@ -83,10 +91,10 @@ function DestSearch({ onSelect }: DestSearchProps) {
       }
     }, 350)
     return () => clearTimeout(debounceRef.current)
-  }, [query])
+  }, [query, mapCenter])
 
   return (
-    <div ref={containerRef} className="relative">
+    <div className="relative">
       <div className="flex items-center gap-2 bg-gray-50 rounded-xl px-3 py-2.5 border border-gray-200">
         <svg viewBox="0 0 24 24" fill="#9ca3af" className="w-4 h-4 flex-shrink-0">
           <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z" />
@@ -149,19 +157,22 @@ function SafetyBadge({ score }: { score: number }) {
 
 interface Props {
   isOpen: boolean
+  expanded: boolean
   onClose: () => void
+  onMinimize: () => void
   onRoutesChange: (routes: RouteData[]) => void
   activeIndex: number | null
   onActiveChange: (i: number | null) => void
+  mapCenter: [number, number]
 }
 
 export default function RouteComparisonSheet({
-  isOpen, onClose, onRoutesChange, activeIndex, onActiveChange,
+  isOpen, expanded, onClose, onMinimize, onRoutesChange, activeIndex, onActiveChange, mapCenter,
 }: Props) {
-  const [routes, setRoutes]         = useState<RouteData[]>([])
-  const [destination, setDest]      = useState<NominatimResult | null>(null)
-  const [fetching, setFetching]     = useState(false)
-  const [error, setError]           = useState<string | null>(null)
+  const [routes, setRoutes]           = useState<RouteData[]>([])
+  const [destination, setDest]        = useState<NominatimResult | null>(null)
+  const [fetching, setFetching]       = useState(false)
+  const [error, setError]             = useState<string | null>(null)
   const [originLabel, setOriginLabel] = useState<string>('Your location')
 
   const fetchRoutes = useCallback(async (dest: NominatimResult) => {
@@ -174,7 +185,6 @@ export default function RouteComparisonSheet({
       async pos => {
         const { latitude: oLat, longitude: oLng } = pos.coords
         setOriginLabel('Your location')
-
         const destLat = parseFloat(dest.lat)
         const destLng = parseFloat(dest.lon)
 
@@ -193,8 +203,13 @@ export default function RouteComparisonSheet({
             return
           }
 
+          const colors = pickColors(json.routes.length)
+
           const built: RouteData[] = await Promise.all(
-            json.routes.map(async (r: { distance: number; duration: number; geometry: { coordinates: [number,number][] } }, i: number) => {
+            json.routes.map(async (
+              r: { distance: number; duration: number; geometry: { coordinates: [number, number][] } },
+              i: number
+            ) => {
               const safety = await scoreRoute(r.geometry.coordinates)
               return {
                 index: i,
@@ -202,12 +217,11 @@ export default function RouteComparisonSheet({
                 duration: r.duration,
                 coordinates: r.geometry.coordinates,
                 safetyScore: safety,
-                color: ROUTE_COLORS[i % ROUTE_COLORS.length],
+                color: colors[i],
               }
             })
           )
 
-          // Sort by safety desc, then distance asc
           built.sort((a, b) =>
             b.safetyScore !== a.safetyScore
               ? b.safetyScore - a.safetyScore
@@ -235,6 +249,7 @@ export default function RouteComparisonSheet({
     fetchRoutes(r)
   }
 
+  // Full close — clears routes from map
   const handleClose = () => {
     setRoutes([])
     setDest(null)
@@ -244,15 +259,52 @@ export default function RouteComparisonSheet({
     onClose()
   }
 
+  // Minimized floating pill — routes stay on map
+  if (isOpen && !expanded) {
+    return (
+      <div className="fixed bottom-[172px] left-4 right-20 z-[950] bg-white rounded-2xl shadow-2xl px-4 py-3 flex items-center justify-between">
+        <div className="flex items-center gap-2 flex-1 min-w-0">
+          {routes.map(r => (
+            <button
+              key={r.index}
+              onClick={() => onActiveChange(r.index)}
+              title={`Route ${r.index + 1}`}
+              className="rounded-full transition-all flex-shrink-0"
+              style={{
+                width: activeIndex === r.index ? 16 : 12,
+                height: activeIndex === r.index ? 16 : 12,
+                background: r.color,
+                opacity: activeIndex === r.index || activeIndex === null ? 1 : 0.35,
+              }}
+            />
+          ))}
+          <span className="text-sm font-medium text-secondary ml-1 truncate">
+            {routes.length > 0
+              ? `${routes.length} route${routes.length > 1 ? 's' : ''} on map`
+              : 'Routes'}
+          </span>
+        </div>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <span className="text-xs text-gray-400">Tap ROUTES to expand</span>
+          <button onClick={handleClose} className="text-gray-400 hover:text-gray-600 ml-1">
+            <svg viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5">
+              <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
+            </svg>
+          </button>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <>
-      {isOpen && (
-        <div className="fixed inset-0 bg-black/30 z-[900]" onClick={handleClose} />
+      {isOpen && expanded && (
+        <div className="fixed inset-0 bg-black/30 z-[900]" onClick={onMinimize} />
       )}
 
       <div
         className={`fixed bottom-0 left-0 right-0 z-[950] bg-white rounded-t-3xl shadow-2xl bottom-sheet ${
-          isOpen ? 'bottom-sheet-visible' : 'bottom-sheet-hidden'
+          isOpen && expanded ? 'bottom-sheet-visible' : 'bottom-sheet-hidden'
         }`}
         style={{ maxHeight: '80vh', overflowY: 'auto' }}
         onClick={e => e.stopPropagation()}
@@ -265,11 +317,24 @@ export default function RouteComparisonSheet({
               <h2 className="text-lg font-bold text-secondary">Compare Routes</h2>
               <p className="text-xs text-gray-400 mt-0.5">Ranked by safety score</p>
             </div>
-            <button onClick={handleClose} className="text-gray-400 hover:text-gray-600 p-1">
-              <svg viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6">
-                <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
-              </svg>
-            </button>
+            <div className="flex items-center gap-1">
+              {/* Minimise button */}
+              <button
+                onClick={onMinimize}
+                className="text-gray-400 hover:text-gray-600 p-1"
+                aria-label="Minimise"
+              >
+                <svg viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5">
+                  <path d="M19 13H5v-2h14v2z" />
+                </svg>
+              </button>
+              {/* Close button */}
+              <button onClick={handleClose} className="text-gray-400 hover:text-gray-600 p-1">
+                <svg viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6">
+                  <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
+                </svg>
+              </button>
+            </div>
           </div>
 
           {/* Origin / Dest */}
@@ -282,12 +347,11 @@ export default function RouteComparisonSheet({
             <div className="flex items-center gap-3">
               <div className="w-2 h-2 rounded-full bg-primary flex-shrink-0" />
               <div className="flex-1">
-                <DestSearch onSelect={handleDestSelect} />
+                <DestSearch onSelect={handleDestSelect} mapCenter={mapCenter} />
               </div>
             </div>
           </div>
 
-          {/* Loading */}
           {fetching && (
             <div className="flex flex-col items-center py-8 gap-3">
               <div className="w-8 h-8 border-3 border-accent border-t-transparent rounded-full animate-spin" />
@@ -295,14 +359,12 @@ export default function RouteComparisonSheet({
             </div>
           )}
 
-          {/* Error */}
           {error && !fetching && (
             <div className="bg-primary/5 rounded-xl px-4 py-3 text-sm text-primary">
               {error}
             </div>
           )}
 
-          {/* Route cards */}
           {!fetching && routes.length > 0 && (
             <div className="flex flex-col gap-3">
               {routes.map((route, rank) => {
@@ -313,15 +375,17 @@ export default function RouteComparisonSheet({
                     key={route.index}
                     onClick={() => onActiveChange(isActive ? null : route.index)}
                     className={`w-full text-left rounded-2xl border-2 p-4 transition-all active:scale-[0.98] ${
-                      isActive
-                        ? 'border-accent bg-accent/5 shadow-md'
-                        : 'border-gray-100 bg-white hover:border-gray-200'
+                      isActive ? 'shadow-md' : 'border-gray-100 bg-white hover:border-gray-200'
                     }`}
+                    style={isActive
+                      ? { borderColor: route.color, backgroundColor: `${route.color}18` }
+                      : {}
+                    }
                   >
                     <div className="flex items-center justify-between mb-2">
                       <div className="flex items-center gap-2">
                         <span
-                          className="w-3 h-3 rounded-full flex-shrink-0"
+                          className="w-3.5 h-3.5 rounded-full flex-shrink-0"
                           style={{ background: route.color }}
                         />
                         <span className="font-bold text-secondary text-sm">
@@ -361,12 +425,11 @@ export default function RouteComparisonSheet({
               })}
 
               <p className="text-xs text-gray-400 text-center pt-1">
-                Tap a route to highlight it on the map
+                Tap a route to highlight it · tap − to minimise
               </p>
             </div>
           )}
 
-          {/* Empty state */}
           {!fetching && !error && routes.length === 0 && destination === null && (
             <div className="flex flex-col items-center py-6 gap-2 text-center">
               <div className="w-14 h-14 bg-accent/10 rounded-full flex items-center justify-center mb-2">

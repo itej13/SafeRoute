@@ -192,11 +192,13 @@ function SearchBar({ onLocationSelected }: SearchBarProps) {
 
 // ── Routes FAB ────────────────────────────────────────────────────────────────
 
-function RoutesFAB({ onClick }: { onClick: () => void }) {
+function RoutesFAB({ onClick, active }: { onClick: () => void; active: boolean }) {
   return (
     <button
       onClick={onClick}
-      className="fixed bottom-44 right-4 z-[999] w-14 h-14 bg-secondary text-white rounded-full shadow-xl flex flex-col items-center justify-center gap-0.5 active:scale-95 transition-transform"
+      className={`fixed bottom-44 right-4 z-[999] w-16 h-16 text-white rounded-full shadow-xl flex flex-col items-center justify-center gap-0.5 active:scale-95 transition-all ${
+        active ? 'bg-accent ring-2 ring-white ring-offset-2 ring-offset-accent' : 'bg-secondary'
+      }`}
       aria-label="Compare routes"
     >
       <svg viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5">
@@ -213,6 +215,7 @@ export default function MapPage() {
   const [selectedPoint, setSelectedPoint]   = useState<{ lat: number; lng: number } | null>(null)
   const [refreshKey, setRefreshKey]         = useState(0)
   const [routeCompareOpen, setRouteCompareOpen] = useState(false)
+  const [sheetExpanded, setSheetExpanded]   = useState(true)
   const [routes, setRoutes]                 = useState<RouteData[]>([])
   const [activeRouteIdx, setActiveRouteIdx] = useState<number | null>(null)
 
@@ -237,7 +240,7 @@ export default function MapPage() {
         />
         <HeatmapLayer refreshKey={refreshKey} />
         <ClickHandler onMapClick={handleMapClick} />
-        <SearchBar onLocationSelected={() => {}} />
+        <SearchBar onLocationSelected={r => setSelectedPoint({ lat: parseFloat(r.lat), lng: parseFloat(r.lon) })} />
         <FlyToControl />
         <RoutePolylines routes={routes} activeIndex={activeRouteIdx} />
       </MapContainer>
@@ -258,7 +261,17 @@ export default function MapPage() {
         </div>
       </div>
 
-      <RoutesFAB onClick={() => setRouteCompareOpen(true)} />
+      <RoutesFAB
+        active={routeCompareOpen}
+        onClick={() => {
+          if (routeCompareOpen) {
+            setSheetExpanded(true)   // re-expand if minimised
+          } else {
+            setRouteCompareOpen(true)
+            setSheetExpanded(true)
+          }
+        }}
+      />
       <SOSButton />
 
       <RatingPanel
@@ -270,10 +283,13 @@ export default function MapPage() {
 
       <RouteComparisonSheet
         isOpen={routeCompareOpen}
-        onClose={() => setRouteCompareOpen(false)}
+        expanded={sheetExpanded}
+        onClose={() => { setRouteCompareOpen(false); setSheetExpanded(true) }}
+        onMinimize={() => setSheetExpanded(false)}
         onRoutesChange={setRoutes}
         activeIndex={activeRouteIdx}
         onActiveChange={setActiveRouteIdx}
+        mapCenter={DTU_CENTER}
       />
     </div>
   )
