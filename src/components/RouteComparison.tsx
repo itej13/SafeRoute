@@ -164,10 +164,13 @@ interface Props {
   activeIndex: number | null
   onActiveChange: (i: number | null) => void
   mapCenter: [number, number]
+  preFilledDest?: NominatimResult | null
+  onPreFilledConsumed?: () => void
 }
 
 export default function RouteComparisonSheet({
   isOpen, expanded, onClose, onMinimize, onRoutesChange, activeIndex, onActiveChange, mapCenter,
+  preFilledDest, onPreFilledConsumed,
 }: Props) {
   const [routes, setRoutes]           = useState<RouteData[]>([])
   const [destination, setDest]        = useState<NominatimResult | null>(null)
@@ -243,6 +246,15 @@ export default function RouteComparisonSheet({
       }
     )
   }, [onRoutesChange, onActiveChange])
+
+  // Auto-fetch when a destination is pushed in from the search bar PlaceCard
+  useEffect(() => {
+    if (preFilledDest && isOpen && expanded) {
+      setDest(preFilledDest)
+      fetchRoutes(preFilledDest)
+      onPreFilledConsumed?.()
+    }
+  }, [preFilledDest, isOpen, expanded, fetchRoutes, onPreFilledConsumed])
 
   const handleDestSelect = (r: NominatimResult) => {
     setDest(r)

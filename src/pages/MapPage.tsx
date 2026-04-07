@@ -190,6 +190,60 @@ function SearchBar({ onLocationSelected }: SearchBarProps) {
   )
 }
 
+// ── Place action card (shown after search selection) ─────────────────────────
+
+function PlaceCard({
+  place,
+  onRate,
+  onDirections,
+  onClose,
+}: {
+  place: NominatimResult
+  onRate: () => void
+  onDirections: () => void
+  onClose: () => void
+}) {
+  const parts = place.display_name.split(',')
+  const name = parts[0]
+  const address = parts.slice(1, 3).join(', ')
+
+  return (
+    <div className="fixed bottom-[72px] left-4 right-4 z-[1001] bg-white rounded-2xl shadow-2xl p-4">
+      <div className="flex items-start justify-between mb-3">
+        <div className="flex-1 min-w-0 pr-3">
+          <p className="font-bold text-secondary text-base truncate">{name}</p>
+          {address && <p className="text-xs text-gray-400 mt-0.5 truncate">{address}</p>}
+        </div>
+        <button onClick={onClose} className="text-gray-400 flex-shrink-0 p-1">
+          <svg viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5">
+            <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
+          </svg>
+        </button>
+      </div>
+      <div className="flex gap-3">
+        <button
+          onClick={onRate}
+          className="flex-1 py-2.5 rounded-xl bg-accent/10 text-accent font-semibold text-sm flex items-center justify-center gap-2 active:scale-95 transition-transform"
+        >
+          <svg viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4">
+            <path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z" />
+          </svg>
+          Rate Place
+        </button>
+        <button
+          onClick={onDirections}
+          className="flex-1 py-2.5 rounded-xl bg-secondary text-white font-semibold text-sm flex items-center justify-center gap-2 active:scale-95 transition-transform"
+        >
+          <svg viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4">
+            <path d="M21.71 11.29l-9-9c-.39-.39-1.02-.39-1.41 0l-9 9c-.39.39-.39 1.02 0 1.41l9 9c.39.39 1.02.39 1.41 0l9-9c.39-.38.39-1.01 0-1.41zM14 14.5V12h-4v3H8v-4c0-.55.45-1 1-1h5V7.5l3.5 3.5-3.5 3.5z" />
+          </svg>
+          Directions
+        </button>
+      </div>
+    </div>
+  )
+}
+
 // ── Routes FAB ────────────────────────────────────────────────────────────────
 
 function RoutesFAB({ onClick, active }: { onClick: () => void; active: boolean }) {
@@ -213,6 +267,8 @@ function RoutesFAB({ onClick, active }: { onClick: () => void; active: boolean }
 
 export default function MapPage() {
   const [selectedPoint, setSelectedPoint]   = useState<{ lat: number; lng: number } | null>(null)
+  const [searchedPlace, setSearchedPlace]   = useState<NominatimResult | null>(null)
+  const [preFilledDest, setPreFilledDest]   = useState<NominatimResult | null>(null)
   const [refreshKey, setRefreshKey]         = useState(0)
   const [routeCompareOpen, setRouteCompareOpen] = useState(false)
   const [sheetExpanded, setSheetExpanded]   = useState(true)
@@ -220,7 +276,10 @@ export default function MapPage() {
   const [activeRouteIdx, setActiveRouteIdx] = useState<number | null>(null)
 
   const handleMapClick = useCallback((lat: number, lng: number) => {
-    if (!routeCompareOpen) setSelectedPoint({ lat, lng })
+    if (!routeCompareOpen) {
+      setSelectedPoint({ lat, lng })
+      setSearchedPlace(null)
+    }
   }, [routeCompareOpen])
 
   const handleSubmitted = useCallback(() => setRefreshKey(k => k + 1), [])
@@ -240,7 +299,7 @@ export default function MapPage() {
         />
         <HeatmapLayer refreshKey={refreshKey} />
         <ClickHandler onMapClick={handleMapClick} />
-        <SearchBar onLocationSelected={r => setSelectedPoint({ lat: parseFloat(r.lat), lng: parseFloat(r.lon) })} />
+        <SearchBar onLocationSelected={r => { setSearchedPlace(r); setSelectedPoint(null) }} />
         <FlyToControl />
         <RoutePolylines routes={routes} activeIndex={activeRouteIdx} />
       </MapContainer>
@@ -274,6 +333,23 @@ export default function MapPage() {
       />
       <SOSButton />
 
+      {searchedPlace && (
+        <PlaceCard
+          place={searchedPlace}
+          onRate={() => {
+            setSelectedPoint({ lat: parseFloat(searchedPlace.lat), lng: parseFloat(searchedPlace.lon) })
+            setSearchedPlace(null)
+          }}
+          onDirections={() => {
+            setPreFilledDest(searchedPlace)
+            setSearchedPlace(null)
+            setRouteCompareOpen(true)
+            setSheetExpanded(true)
+          }}
+          onClose={() => setSearchedPlace(null)}
+        />
+      )}
+
       <RatingPanel
         lat={selectedPoint?.lat ?? null}
         lng={selectedPoint?.lng ?? null}
@@ -290,6 +366,8 @@ export default function MapPage() {
         activeIndex={activeRouteIdx}
         onActiveChange={setActiveRouteIdx}
         mapCenter={DTU_CENTER}
+        preFilledDest={preFilledDest}
+        onPreFilledConsumed={() => setPreFilledDest(null)}
       />
     </div>
   )
