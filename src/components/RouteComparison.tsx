@@ -37,10 +37,15 @@ export function RoutePolylines({ routes, activeIndex }: RoutePolylinesProps) {
   )
 }
 
-// ── Safety scorer ─────────────────────────────────────────────────────────────
+// ── Safety scorer — single DB query for all routes ───────────────────────────
 
-async function scoreRoute(coordinates: [number, number][]): Promise<number> {
-  const bbox = getBoundingBox(coordinates)
+type RawRoute = { distance: number; duration: number; geometry: { coordinates: [number, number][] } }
+
+async function scoreAllRoutes(routes: RawRoute[]): Promise<number[]> {
+  // One unified bbox covering all routes → single Supabase round-trip
+  const allCoords = routes.flatMap(r => r.geometry.coordinates)
+  const bbox = getBoundingBox(allCoords)
+
   const { data } = await supabase
     .from('ratings')
     .select('lat, lng, safety_score')
@@ -49,14 +54,17 @@ async function scoreRoute(coordinates: [number, number][]): Promise<number> {
     .gte('lng', bbox.minLng - 0.002)
     .lte('lng', bbox.maxLng + 0.002)
 
-  if (!data || data.length === 0) return 3
+  const ratings = data ?? []
 
-  const samples = coordinates.filter((_, i) => i % 8 === 0)
-  const nearby = data.filter(r =>
-    samples.some(([lng, lat]) => haversine(lat, lng, r.lat, r.lng) < 0.18)
-  )
-  if (nearby.length === 0) return 3
-  return nearby.reduce((sum, r) => sum + r.safety_score, 0) / nearby.length
+  return routes.map(route => {
+    if (ratings.length === 0) return 3
+    const samples = route.geometry.coordinates.filter((_, i) => i % 8 === 0)
+    const nearby = ratings.filter(r =>
+      samples.some(([lng, lat]) => haversine(lat, lng, r.lat, r.lng) < 0.18)
+    )
+    if (nearby.length === 0) return 3
+    return nearby.reduce((sum, r) => sum + r.safety_score, 0) / nearby.length
+  })
 }
 
 // ── Destination search with autocomplete ─────────────────────────────────────
@@ -212,22 +220,20 @@ export default function RouteComparisonSheet({
 
           const colors = pickColors(json.routes.length)
 
-          const built: RouteData[] = await Promise.all(
-            json.routes.map(async (
-              r: { distance: number; duration: number; geometry: { coordinates: [number, number][] } },
-              i: number
-            ) => {
-              const safety = await scoreRoute(r.geometry.coordinates)
-              return {
-                index: i,
-                distance: r.distance,
-                duration: r.duration,
-                coordinates: r.geometry.coordinates,
-                safetyScore: safety,
-                color: colors[i],
-              }
-            })
-          )
+          // Single DB query for all routes, then score in-memory
+          const safetyScores = await scoreAllRoutes(json.routes)
+
+          const built: RouteData[] = json.routes.map((
+            r: RawRoute,
+            i: number
+          ) => ({
+            index: i,
+            distance: r.distance,
+            duration: r.duration,
+            coordinates: r.geometry.coordinates,
+            safetyScore: safetyScores[i],
+            color: colors[i],
+          }))
 
           built.sort((a, b) =>
             b.safetyScore !== a.safetyScore
