@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
-import { MapContainer, TileLayer, useMapEvents, useMap } from 'react-leaflet'
+import { MapContainer, TileLayer, Marker, useMapEvents, useMap } from 'react-leaflet'
 import L from 'leaflet'
 import HeatmapLayer from '../components/HeatmapLayer'
 import RatingPanel from '../components/RatingPanel'
@@ -16,6 +16,22 @@ L.Icon.Default.mergeOptions({
 })
 
 const DTU_CENTER: [number, number] = [28.7501, 77.1177]
+
+// Blue dot — current user location
+const userLocationIcon = L.divIcon({
+  html: `<div style="width:18px;height:18px;background:#4285F4;border:3px solid white;border-radius:50%;box-shadow:0 2px 6px rgba(0,0,0,0.4)"></div>`,
+  className: '',
+  iconSize: [18, 18],
+  iconAnchor: [9, 9],
+})
+
+// Red teardrop — destination (Google Maps style)
+const destinationIcon = L.divIcon({
+  html: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 36" width="28" height="36"><path fill="#E63946" stroke="white" stroke-width="1.5" d="M12 0C5.373 0 0 5.373 0 12c0 9 12 24 12 24S24 21 24 12C24 5.373 18.627 0 12 0z"/><circle fill="white" cx="12" cy="12" r="5"/></svg>`,
+  className: '',
+  iconSize: [28, 36],
+  iconAnchor: [14, 36],
+})
 
 // ── Map click handler ─────────────────────────────────────────────────────────
 
@@ -283,6 +299,18 @@ export default function MapPage() {
   const [sheetExpanded, setSheetExpanded]   = useState(true)
   const [routes, setRoutes]                 = useState<RouteData[]>([])
   const [activeRouteIdx, setActiveRouteIdx] = useState<number | null>(null)
+  const [userPos, setUserPos]               = useState<[number, number] | null>(null)
+  const [destMarkerPos, setDestMarkerPos]   = useState<[number, number] | null>(null)
+
+  // Track user GPS location continuously
+  useEffect(() => {
+    if (!navigator.geolocation) return
+    const id = navigator.geolocation.watchPosition(
+      p => setUserPos([p.coords.latitude, p.coords.longitude]),
+      () => {}
+    )
+    return () => navigator.geolocation.clearWatch(id)
+  }, [])
 
   const handleMapClick = useCallback((lat: number, lng: number) => {
     if (!routeCompareOpen) {
@@ -308,9 +336,19 @@ export default function MapPage() {
         />
         <HeatmapLayer refreshKey={refreshKey} />
         <ClickHandler onMapClick={handleMapClick} />
-        <SearchBar onLocationSelected={r => { setSearchedPlace(r); setSelectedPoint(null) }} />
+        <SearchBar onLocationSelected={r => {
+          setSearchedPlace(r)
+          setSelectedPoint(null)
+          setDestMarkerPos([parseFloat(r.lat), parseFloat(r.lon)])
+        }} />
         <FlyToControl />
         <RoutePolylines routes={routes} activeIndex={activeRouteIdx} />
+        {userPos && (
+          <Marker position={userPos} icon={userLocationIcon} />
+        )}
+        {destMarkerPos && (
+          <Marker position={destMarkerPos} icon={destinationIcon} />
+        )}
       </MapContainer>
 
       {/* Legend */}
@@ -351,11 +389,12 @@ export default function MapPage() {
           }}
           onDirections={() => {
             setPreFilledDest(searchedPlace)
+            setDestMarkerPos([parseFloat(searchedPlace.lat), parseFloat(searchedPlace.lon)])
             setSearchedPlace(null)
             setRouteCompareOpen(true)
             setSheetExpanded(true)
           }}
-          onClose={() => setSearchedPlace(null)}
+          onClose={() => { setSearchedPlace(null); setDestMarkerPos(null) }}
         />
       )}
 
@@ -369,7 +408,7 @@ export default function MapPage() {
       <RouteComparisonSheet
         isOpen={routeCompareOpen}
         expanded={sheetExpanded}
-        onClose={() => { setRouteCompareOpen(false); setSheetExpanded(true) }}
+        onClose={() => { setRouteCompareOpen(false); setSheetExpanded(true); setDestMarkerPos(null) }}
         onMinimize={() => setSheetExpanded(false)}
         onRoutesChange={setRoutes}
         activeIndex={activeRouteIdx}
@@ -377,6 +416,7 @@ export default function MapPage() {
         mapCenter={DTU_CENTER}
         preFilledDest={preFilledDest}
         onPreFilledConsumed={() => setPreFilledDest(null)}
+        onDestChange={pos => setDestMarkerPos(pos)}
       />
     </div>
   )

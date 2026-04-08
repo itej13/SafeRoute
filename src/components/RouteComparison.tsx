@@ -109,7 +109,6 @@ function DestSearch({ onSelect, mapCenter }: DestSearchProps) {
           onChange={e => setQuery(e.target.value)}
           placeholder="Search destination..."
           className="flex-1 bg-transparent text-sm text-secondary outline-none placeholder-gray-400"
-          autoFocus
         />
         {loading && <div className="w-3.5 h-3.5 border-2 border-accent border-t-transparent rounded-full animate-spin flex-shrink-0" />}
         {query && !loading && (
@@ -170,11 +169,12 @@ interface Props {
   mapCenter: [number, number]
   preFilledDest?: NominatimResult | null
   onPreFilledConsumed?: () => void
+  onDestChange?: (pos: [number, number] | null) => void
 }
 
 export default function RouteComparisonSheet({
   isOpen, expanded, onClose, onMinimize, onRoutesChange, activeIndex, onActiveChange, mapCenter,
-  preFilledDest, onPreFilledConsumed,
+  preFilledDest, onPreFilledConsumed, onDestChange,
 }: Props) {
   const [routes, setRoutes]           = useState<RouteData[]>([])
   const [destination, setDest]        = useState<NominatimResult | null>(null)
@@ -253,16 +253,18 @@ export default function RouteComparisonSheet({
 
   // Auto-fetch when a destination is pushed in from the search bar PlaceCard
   useEffect(() => {
-    if (preFilledDest && isOpen && expanded) {
+    if (preFilledDest && isOpen) {
       setDest(preFilledDest)
       fetchRoutes(preFilledDest)
+      onDestChange?.([parseFloat(preFilledDest.lat), parseFloat(preFilledDest.lon)])
       onPreFilledConsumed?.()
     }
-  }, [preFilledDest, isOpen, expanded, fetchRoutes, onPreFilledConsumed])
+  }, [preFilledDest, isOpen, fetchRoutes, onPreFilledConsumed, onDestChange])
 
   const handleDestSelect = (r: NominatimResult) => {
     setDest(r)
     fetchRoutes(r)
+    onDestChange?.([parseFloat(r.lat), parseFloat(r.lon)])
   }
 
   // Full close — clears routes from map
@@ -272,52 +274,53 @@ export default function RouteComparisonSheet({
     setError(null)
     onRoutesChange([])
     onActiveChange(null)
+    onDestChange?.(null)
     onClose()
-  }
-
-  // Minimized floating pill — routes stay on map
-  if (isOpen && !expanded) {
-    return (
-      <div className="fixed bottom-[172px] left-4 right-20 z-[950] bg-white rounded-2xl shadow-2xl px-4 py-3 flex items-center justify-between">
-        <div className="flex items-center gap-2 flex-1 min-w-0">
-          {routes.map(r => (
-            <button
-              key={r.index}
-              onClick={() => onActiveChange(r.index)}
-              title={`Route ${r.index + 1}`}
-              className="rounded-full transition-all flex-shrink-0"
-              style={{
-                width: activeIndex === r.index ? 16 : 12,
-                height: activeIndex === r.index ? 16 : 12,
-                background: r.color,
-                opacity: activeIndex === r.index || activeIndex === null ? 1 : 0.35,
-              }}
-            />
-          ))}
-          <span className="text-sm font-medium text-secondary ml-1 truncate">
-            {routes.length > 0
-              ? `${routes.length} route${routes.length > 1 ? 's' : ''} on map`
-              : 'Routes'}
-          </span>
-        </div>
-        <div className="flex items-center gap-2 flex-shrink-0">
-          <span className="text-xs text-gray-400">Tap ROUTES to expand</span>
-          <button onClick={handleClose} className="text-gray-400 hover:text-gray-600 ml-1">
-            <svg viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5">
-              <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
-            </svg>
-          </button>
-        </div>
-      </div>
-    )
   }
 
   return (
     <>
+      {/* Backdrop — only when expanded */}
       {isOpen && expanded && (
         <div className="fixed inset-0 bg-black/30 z-[900]" onClick={onMinimize} />
       )}
 
+      {/* Minimized pill — always in DOM when open, shown only when !expanded */}
+      {isOpen && !expanded && (
+        <div className="fixed bottom-[172px] left-4 right-20 z-[950] bg-white rounded-2xl shadow-2xl px-4 py-3 flex items-center justify-between">
+          <div className="flex items-center gap-2 flex-1 min-w-0">
+            {routes.map(r => (
+              <button
+                key={r.index}
+                onClick={() => onActiveChange(r.index)}
+                title={`Route ${r.index + 1}`}
+                className="rounded-full transition-all flex-shrink-0"
+                style={{
+                  width: activeIndex === r.index ? 16 : 12,
+                  height: activeIndex === r.index ? 16 : 12,
+                  background: r.color,
+                  opacity: activeIndex === r.index || activeIndex === null ? 1 : 0.35,
+                }}
+              />
+            ))}
+            <span className="text-sm font-medium text-secondary ml-1 truncate">
+              {routes.length > 0
+                ? `${routes.length} route${routes.length > 1 ? 's' : ''} on map`
+                : 'Routes'}
+            </span>
+          </div>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <span className="text-xs text-gray-400">Tap ROUTES to expand</span>
+            <button onClick={handleClose} className="text-gray-400 hover:text-gray-600 ml-1">
+              <svg viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5">
+                <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
+              </svg>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Full sheet — always in DOM, CSS transitions between hidden/visible */}
       <div
         className={`fixed bottom-0 left-0 right-0 z-[950] bg-white rounded-t-3xl shadow-2xl bottom-sheet ${
           isOpen && expanded ? 'bottom-sheet-visible' : 'bottom-sheet-hidden'
