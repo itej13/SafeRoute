@@ -133,6 +133,7 @@ function DestSearch({ onSelect, mapCenter }: DestSearchProps) {
           {results.map(r => (
             <li key={r.place_id}>
               <button
+                onMouseDown={e => e.preventDefault()}
                 onClick={() => { onSelect(r); setQuery(r.display_name.split(',')[0]); setResults([]) }}
                 className="w-full text-left px-4 py-3 text-sm hover:bg-gray-50 active:bg-gray-100 border-b border-gray-50 last:border-0 transition-colors"
               >
@@ -175,6 +176,7 @@ interface Props {
   activeIndex: number | null
   onActiveChange: (i: number | null) => void
   mapCenter: [number, number]
+  userPos?: [number, number] | null
   preFilledDest?: NominatimResult | null
   onPreFilledConsumed?: () => void
   onDestChange?: (pos: [number, number] | null) => void
@@ -182,7 +184,7 @@ interface Props {
 
 export default function RouteComparisonSheet({
   isOpen, expanded, onClose, onMinimize, onRoutesChange, activeIndex, onActiveChange, mapCenter,
-  preFilledDest, onPreFilledConsumed, onDestChange,
+  userPos, preFilledDest, onPreFilledConsumed, onDestChange,
 }: Props) {
   const [routes, setRoutes]           = useState<RouteData[]>([])
   const [destination, setDest]        = useState<NominatimResult | null>(null)
@@ -190,72 +192,69 @@ export default function RouteComparisonSheet({
   const [error, setError]             = useState<string | null>(null)
   const [originLabel, setOriginLabel] = useState<string>('Your location')
 
+  const doFetch = useCallback(async (oLat: number, oLng: number, dest: NominatimResult) => {
+    setOriginLabel('Your location')
+    const destLat = parseFloat(dest.lat)
+    const destLng = parseFloat(dest.lon)
+    try {
+      const url =
+        `https://router.project-osrm.org/route/v1/driving/` +
+        `${oLng},${oLat};${destLng},${destLat}` +
+        `?alternatives=3&overview=full&geometries=geojson`
+
+      const res  = await fetch(url)
+      const json = await res.json()
+
+      if (json.code !== 'Ok' || !json.routes?.length) {
+        setError('No routes found between these locations.')
+        setFetching(false)
+        return
+      }
+
+      const colors = pickColors(json.routes.length)
+      const safetyScores = await scoreAllRoutes(json.routes)
+
+      const built: RouteData[] = json.routes.map((r: RawRoute, i: number) => ({
+        index: i,
+        distance: r.distance,
+        duration: r.duration,
+        coordinates: r.geometry.coordinates,
+        safetyScore: safetyScores[i],
+        color: colors[i],
+      }))
+
+      built.sort((a, b) =>
+        b.safetyScore !== a.safetyScore
+          ? b.safetyScore - a.safetyScore
+          : a.distance - b.distance
+      )
+
+      setRoutes(built)
+      onRoutesChange(built)
+      onActiveChange(built[0].index)
+    } catch {
+      setError('Failed to fetch routes. Check your connection.')
+    } finally {
+      setFetching(false)
+    }
+  }, [onRoutesChange, onActiveChange])
+
   const fetchRoutes = useCallback(async (dest: NominatimResult) => {
     setFetching(true)
     setError(null)
     setRoutes([])
     onRoutesChange([])
 
-    navigator.geolocation.getCurrentPosition(
-      async pos => {
-        const { latitude: oLat, longitude: oLng } = pos.coords
-        setOriginLabel('Your location')
-        const destLat = parseFloat(dest.lat)
-        const destLng = parseFloat(dest.lon)
-
-        try {
-          const url =
-            `https://router.project-osrm.org/route/v1/driving/` +
-            `${oLng},${oLat};${destLng},${destLat}` +
-            `?alternatives=3&overview=full&geometries=geojson`
-
-          const res  = await fetch(url)
-          const json = await res.json()
-
-          if (json.code !== 'Ok' || !json.routes?.length) {
-            setError('No routes found between these locations.')
-            setFetching(false)
-            return
-          }
-
-          const colors = pickColors(json.routes.length)
-
-          // Single DB query for all routes, then score in-memory
-          const safetyScores = await scoreAllRoutes(json.routes)
-
-          const built: RouteData[] = json.routes.map((
-            r: RawRoute,
-            i: number
-          ) => ({
-            index: i,
-            distance: r.distance,
-            duration: r.duration,
-            coordinates: r.geometry.coordinates,
-            safetyScore: safetyScores[i],
-            color: colors[i],
-          }))
-
-          built.sort((a, b) =>
-            b.safetyScore !== a.safetyScore
-              ? b.safetyScore - a.safetyScore
-              : a.distance - b.distance
-          )
-
-          setRoutes(built)
-          onRoutesChange(built)
-          onActiveChange(built[0].index)
-        } catch {
-          setError('Failed to fetch routes. Check your connection.')
-        } finally {
-          setFetching(false)
-        }
-      },
-      () => {
-        setError('Location access denied. Enable GPS to compare routes.')
-        setFetching(false)
-      }
-    )
-  }, [onRoutesChange, onActiveChange])
+    if (userPos) {
+      // Use the already-acquired GPS position — no wait
+      await doFetch(userPos[0], userPos[1], dest)
+    } else {
+      navigator.geolocation.getCurrentPosition(
+        async pos => { await doFetch(pos.coords.latitude, pos.coords.longitude, dest) },
+        () => { setError('Location access denied. Enable GPS to compare routes.'); setFetching(false) }
+      )
+    }
+  }, [userPos, doFetch, onRoutesChange])
 
   // Auto-fetch when a destination is pushed in from the search bar PlaceCard
   useEffect(() => {

@@ -414,6 +414,7 @@ export default function MapPage() {
         activeIndex={activeRouteIdx}
         onActiveChange={setActiveRouteIdx}
         mapCenter={DTU_CENTER}
+        userPos={userPos}
         preFilledDest={preFilledDest}
         onPreFilledConsumed={() => setPreFilledDest(null)}
         onDestChange={pos => setDestMarkerPos(pos)}
