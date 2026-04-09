@@ -24,7 +24,18 @@ dist-ssr
 *.sln
 *.sw?
 
-# Env
+# Env — never commit real keys
 .env
 .env.local
 .env.production
+.env.*.local
+
+# Claude Code — local tool settings
+.claude/
+
+# Code review graph — generated index
+.code-review-graph/
+
+# Internal docs
+*.docx
+*.pdf
