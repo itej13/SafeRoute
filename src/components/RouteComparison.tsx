@@ -1,472 +1,220 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
-import { Polyline } from 'react-leaflet'
+import { useEffect, useState } from 'react'
+import { Polyline, useMap } from 'react-leaflet'
+import L from 'leaflet'
 import { supabase } from '../lib/supabase'
-import { haversine, formatDistance, formatWalkTime, getBoundingBox } from '../lib/geo'
-import type { NominatimResult, RouteData } from '../lib/types'
+import { haversine, formatDistance, formatDuration, findDistrict } from '../lib/geo'
+import { crimeForDistrict, type DistrictCrime } from '../lib/crimeData'
+import type { Rating, RouteData } from '../lib/types'
 
-const VIBRANT_COLORS = [
-  '#FF4757', '#2ED573', '#1E90FF', '#FF6348',
-  '#A29BFE', '#FD79A8', '#00CEC9', '#FDCB6E',
-  '#6C5CE7', '#26de81',
-]
+const OSRM_BASE = 'https://router.project-osrm.org/route/v1'
+// ponytail: public OSRM only serves the driving profile; point at a self-hosted
+// instance with a foot profile for true walking routes
+const PROFILE = 'driving'
 
-function pickColors(count: number): string[] {
-  return [...VIBRANT_COLORS].sort(() => Math.random() - 0.5).slice(0, count)
+const RATING_RADIUS_M = 250
+const BBOX_BUFFER_DEG = 0.0025 // ≈ 250 m, keeps edge ratings inside the single query
+
+interface OsrmRoute {
+  distance: number
+  duration: number
+  geometry: { coordinates: [number, number][] } // [lng, lat]
 }
 
-// ── Polylines drawn inside MapContainer ──────────────────────────────────────
-
-interface RoutePolylinesProps {
-  routes: RouteData[]
-  activeIndex: number | null
+async function fetchRatingsAround(routes: RouteData[]): Promise<Rating[]> {
+  const lats = routes.flatMap(r => r.coords.map(c => c[0]))
+  const lngs = routes.flatMap(r => r.coords.map(c => c[1]))
+  const { data, error } = await supabase
+    .from('ratings')
+    .select('*')
+    .gte('lat', Math.min(...lats) - BBOX_BUFFER_DEG)
+    .lte('lat', Math.max(...lats) + BBOX_BUFFER_DEG)
+    .gte('lng', Math.min(...lngs) - BBOX_BUFFER_DEG)
+    .lte('lng', Math.max(...lngs) + BBOX_BUFFER_DEG)
+  if (error) return []
+  return data ?? []
 }
 
-export function RoutePolylines({ routes, activeIndex }: RoutePolylinesProps) {
+// Crowd score: average of ratings within RATING_RADIUS_M of the route.
+// Coords are sampled — adjacent OSRM points are far closer than the radius.
+function crowdScore(coords: [number, number][], ratings: Rating[]): number | null {
+  const sampled = coords.filter((_, i) => i % 5 === 0)
+  const near = ratings.filter(r =>
+    sampled.some(([lat, lng]) => haversine(lat, lng, r.lat, r.lng) <= RATING_RADIUS_M)
+  )
+  if (near.length === 0) return null
+  return near.reduce((sum, r) => sum + r.score, 0) / near.length
+}
+
+// District base score: NCRB safety index (0–100) of districts the route touches, on a 1–5 scale
+function districtScore(
+  coords: [number, number][],
+  crimeIndex: Map<string, DistrictCrime> | null
+): number | null {
+  if (!crimeIndex) return null
+  const probes = [coords[0], coords[Math.floor(coords.length / 2)], coords[coords.length - 1]]
+  const indices = probes
+    .map(([lat, lng]) => crimeForDistrict(crimeIndex, findDistrict(lat, lng)))
+    .filter((c): c is DistrictCrime => c !== null)
+    .map(c => c.safetyIndex)
+  if (indices.length === 0) return null
+  const avg = indices.reduce((a, b) => a + b, 0) / indices.length
+  return 1 + (avg / 100) * 4
+}
+
+function blend(crowd: number | null, district: number | null): number | null {
+  if (crowd !== null && district !== null) return 0.6 * crowd + 0.4 * district
+  return crowd ?? district
+}
+
+// eslint-disable-next-line react-refresh/only-export-components
+export function useRouteComparison(
+  origin: [number, number] | null,
+  destination: [number, number] | null,
+  crimeIndex: Map<string, DistrictCrime> | null
+) {
+  const [routes, setRoutes] = useState<RouteData[]>([])
+  const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    if (!origin || !destination) {
+      setRoutes([])
+      return
+    }
+    let cancelled = false
+    setLoading(true)
+    ;(async () => {
+      try {
+        const url =
+          `${OSRM_BASE}/${PROFILE}/${origin[1]},${origin[0]};${destination[1]},${destination[0]}` +
+          `?alternatives=true&overview=full&geometries=geojson`
+        const res = await fetch(url)
+        if (!res.ok) throw new Error(`OSRM ${res.status}`)
+        const data: { routes?: OsrmRoute[] } = await res.json()
+        const base: RouteData[] = (data.routes ?? []).map(r => ({
+          coords: r.geometry.coordinates.map(([lng, lat]) => [lat, lng] as [number, number]),
+          distanceMeters: r.distance,
+          durationSeconds: r.duration,
+          safetyScore: null,
+        }))
+        if (base.length === 0) throw new Error('no routes')
+
+        const ratings = await fetchRatingsAround(base)
+        const scored = base.map(r => ({
+          ...r,
+          safetyScore: blend(crowdScore(r.coords, ratings), districtScore(r.coords, crimeIndex)),
+        }))
+        if (!cancelled) setRoutes(scored)
+      } catch {
+        if (!cancelled) setRoutes([])
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [origin, destination, crimeIndex])
+
+  return { routes, loading }
+}
+
+function routeRoles(routes: RouteData[]): { safestIdx: number; fastestIdx: number } {
+  let safestIdx = 0
+  let fastestIdx = 0
+  routes.forEach((r, i) => {
+    if ((r.safetyScore ?? 0) > (routes[safestIdx].safetyScore ?? 0)) safestIdx = i
+    if (r.durationSeconds < routes[fastestIdx].durationSeconds) fastestIdx = i
+  })
+  return { safestIdx, fastestIdx }
+}
+
+export function RoutePolylines({ routes }: { routes: RouteData[] }) {
+  const map = useMap()
+
+  // Zoom out to show every alternative once routes arrive
+  useEffect(() => {
+    if (routes.length === 0) return
+    const bounds = L.latLngBounds(routes.flatMap(r => r.coords))
+    map.fitBounds(bounds, { padding: [40, 40], paddingBottomRight: [40, 180] })
+  }, [routes, map])
+
+  if (routes.length === 0) return null
+  const { safestIdx } = routeRoles(routes)
   return (
     <>
-      {routes.map(route => (
+      {routes.map((r, i) => (
         <Polyline
-          key={route.index}
-          positions={route.coordinates.map(([lng, lat]) => [lat, lng] as [number, number])}
-          color={route.color}
-          weight={activeIndex === route.index ? 7 : 4}
-          opacity={activeIndex === null || activeIndex === route.index ? 0.92 : 0.28}
+          key={i}
+          positions={r.coords}
+          pathOptions={{
+            color: i === safestIdx ? '#3EC98E' : '#FFB648',
+            weight: i === safestIdx ? 6 : 4,
+            opacity: i === safestIdx ? 0.95 : 0.7,
+          }}
         />
       ))}
     </>
   )
 }
 
-// ── Safety scorer — single DB query for all routes ───────────────────────────
-
-type RawRoute = { distance: number; duration: number; geometry: { coordinates: [number, number][] } }
-
-async function scoreAllRoutes(routes: RawRoute[]): Promise<number[]> {
-  // One unified bbox covering all routes → single Supabase round-trip
-  const allCoords = routes.flatMap(r => r.geometry.coordinates)
-  const bbox = getBoundingBox(allCoords)
-
-  const { data } = await supabase
-    .from('ratings')
-    .select('lat, lng, safety_score')
-    .gte('lat', bbox.minLat - 0.002)
-    .lte('lat', bbox.maxLat + 0.002)
-    .gte('lng', bbox.minLng - 0.002)
-    .lte('lng', bbox.maxLng + 0.002)
-
-  const ratings = data ?? []
-
-  return routes.map(route => {
-    if (ratings.length === 0) return 3
-    const samples = route.geometry.coordinates.filter((_, i) => i % 8 === 0)
-    const nearby = ratings.filter(r =>
-      samples.some(([lng, lat]) => haversine(lat, lng, r.lat, r.lng) < 0.18)
-    )
-    if (nearby.length === 0) return 3
-    return nearby.reduce((sum, r) => sum + r.safety_score, 0) / nearby.length
-  })
+interface SheetProps {
+  routes: RouteData[]
+  loading: boolean
+  onClear: () => void
 }
 
-// ── Destination search with autocomplete ─────────────────────────────────────
-
-interface DestSearchProps {
-  onSelect: (r: NominatimResult) => void
-  mapCenter: [number, number]
-}
-
-function DestSearch({ onSelect, mapCenter }: DestSearchProps) {
-  const [query, setQuery] = useState('')
-  const [results, setResults] = useState<NominatimResult[]>([])
-  const [loading, setLoading] = useState(false)
-  const debounceRef = useRef<ReturnType<typeof setTimeout>>()
-
-  useEffect(() => {
-    clearTimeout(debounceRef.current)
-    if (query.length < 2) { setResults([]); return }
-    debounceRef.current = setTimeout(async () => {
-      setLoading(true)
-      try {
-        const [clat, clng] = mapCenter
-        const res = await fetch(
-          `https://photon.komoot.io/api/?q=${encodeURIComponent(query)}&limit=5&lat=${clat}&lon=${clng}&lang=en`
-        )
-        const json = await res.json()
-        const data: NominatimResult[] = (json.features ?? []).map((f: { properties: Record<string, string>; geometry: { coordinates: [number, number] } }) => ({
-          place_id: Number(f.properties.osm_id) || Math.floor(Math.random() * 1e9),
-          display_name: [f.properties.name, f.properties.street, f.properties.city || f.properties.district, f.properties.state, f.properties.country].filter(Boolean).join(', '),
-          lat: String(f.geometry.coordinates[1]),
-          lon: String(f.geometry.coordinates[0]),
-        }))
-        setResults(data)
-      } finally {
-        setLoading(false)
-      }
-    }, 250)
-    return () => clearTimeout(debounceRef.current)
-  }, [query, mapCenter])
+export function RouteSheet({ routes, loading, onClear }: SheetProps) {
+  if (!loading && routes.length === 0) return null
+  const { safestIdx, fastestIdx } = routeRoles(routes)
 
   return (
-    <div className="relative">
-      <div className="flex items-center gap-2 bg-gray-50 rounded-xl px-3 py-2.5 border border-gray-200">
-        <svg viewBox="0 0 24 24" fill="#9ca3af" className="w-4 h-4 flex-shrink-0">
-          <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z" />
-        </svg>
-        <input
-          type="text"
-          value={query}
-          onChange={e => setQuery(e.target.value)}
-          placeholder="Search destination..."
-          className="flex-1 bg-transparent text-sm text-secondary outline-none placeholder-gray-400"
-        />
-        {loading && <div className="w-3.5 h-3.5 border-2 border-accent border-t-transparent rounded-full animate-spin flex-shrink-0" />}
-        {query && !loading && (
-          <button onClick={() => { setQuery(''); setResults([]) }} className="text-gray-400">
-            <svg viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4">
-              <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
-            </svg>
-          </button>
-        )}
+    <div
+      data-no-map-click
+      className="absolute inset-x-0 bottom-0 z-[1000] rounded-t-2xl border-t border-night-600 bg-night-800 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] shadow-2xl"
+    >
+      <div className="mb-2 flex items-center justify-between">
+        <h2 className="font-display text-lg">Routes</h2>
+        <button onClick={onClear} className="text-sm text-mist-400 hover:text-mist-100">
+          Clear
+        </button>
       </div>
 
-      {results.length > 0 && (
-        <ul className="absolute top-full left-0 right-0 mt-1 bg-white rounded-xl shadow-xl border border-gray-100 overflow-hidden z-10">
-          {results.map(r => (
-            <li key={r.place_id}>
-              <button
-                onMouseDown={e => e.preventDefault()}
-                onClick={() => { onSelect(r); setQuery(r.display_name.split(',')[0]); setResults([]) }}
-                className="w-full text-left px-4 py-3 text-sm hover:bg-gray-50 active:bg-gray-100 border-b border-gray-50 last:border-0 transition-colors"
-              >
-                <p className="font-medium text-secondary truncate">{r.display_name.split(',')[0]}</p>
-                <p className="text-xs text-gray-400 truncate mt-0.5">
-                  {r.display_name.split(',').slice(1, 3).join(',')}
+      {loading ? (
+        <p className="py-3 text-sm text-mist-400">Comparing routes…</p>
+      ) : (
+        <ul className="space-y-2">
+          {routes.map((r, i) => (
+            <li key={i} className="flex items-center gap-3 rounded-lg bg-night-700 px-3 py-2.5">
+              <span
+                className="h-2.5 w-2.5 shrink-0 rounded-full"
+                style={{ background: i === safestIdx ? '#3EC98E' : '#FFB648' }}
+              />
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-medium">
+                  {formatDistance(r.distanceMeters)} · {formatDuration(r.durationSeconds)}
                 </p>
-              </button>
+                <p className="text-xs text-mist-400">
+                  {r.safetyScore !== null
+                    ? `Safety ${r.safetyScore.toFixed(1)}/5`
+                    : 'No safety data yet — be the first to rate this area'}
+                </p>
+              </div>
+              <div className="flex gap-1">
+                {i === safestIdx && routes.length > 1 && (
+                  <span className="rounded-full bg-safe/20 px-2 py-0.5 text-[10px] font-semibold text-safe">
+                    SAFEST
+                  </span>
+                )}
+                {i === fastestIdx && (
+                  <span className="rounded-full bg-lamp-400/20 px-2 py-0.5 text-[10px] font-semibold text-lamp-400">
+                    FASTEST
+                  </span>
+                )}
+              </div>
             </li>
           ))}
         </ul>
       )}
     </div>
-  )
-}
-
-// ── Safety badge ──────────────────────────────────────────────────────────────
-
-function SafetyBadge({ score }: { score: number }) {
-  const label = score >= 4 ? 'Safe' : score >= 3 ? 'Moderate' : 'Caution'
-  const cls =
-    score >= 4 ? 'bg-safe/10 text-safe' :
-    score >= 3 ? 'bg-yellow-100 text-yellow-700' :
-    'bg-primary/10 text-primary'
-  return (
-    <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${cls}`}>
-      {label} {score.toFixed(1)}★
-    </span>
-  )
-}
-
-// ── Main sheet ────────────────────────────────────────────────────────────────
-
-interface Props {
-  isOpen: boolean
-  expanded: boolean
-  onClose: () => void
-  onMinimize: () => void
-  onRoutesChange: (routes: RouteData[]) => void
-  activeIndex: number | null
-  onActiveChange: (i: number | null) => void
-  mapCenter: [number, number]
-  userPos?: [number, number] | null
-  preFilledDest?: NominatimResult | null
-  onPreFilledConsumed?: () => void
-  onDestChange?: (pos: [number, number] | null) => void
-}
-
-export default function RouteComparisonSheet({
-  isOpen, expanded, onClose, onMinimize, onRoutesChange, activeIndex, onActiveChange, mapCenter,
-  userPos, preFilledDest, onPreFilledConsumed, onDestChange,
-}: Props) {
-  const [routes, setRoutes]           = useState<RouteData[]>([])
-  const [destination, setDest]        = useState<NominatimResult | null>(null)
-  const [fetching, setFetching]       = useState(false)
-  const [error, setError]             = useState<string | null>(null)
-  const [originLabel, setOriginLabel] = useState<string>('Your location')
-
-  const doFetch = useCallback(async (oLat: number, oLng: number, dest: NominatimResult) => {
-    setOriginLabel('Your location')
-    const destLat = parseFloat(dest.lat)
-    const destLng = parseFloat(dest.lon)
-    try {
-      const url =
-        `https://router.project-osrm.org/route/v1/driving/` +
-        `${oLng},${oLat};${destLng},${destLat}` +
-        `?alternatives=3&overview=full&geometries=geojson`
-
-      const res  = await fetch(url)
-      const json = await res.json()
-
-      if (json.code !== 'Ok' || !json.routes?.length) {
-        setError('No routes found between these locations.')
-        setFetching(false)
-        return
-      }
-
-      const colors = pickColors(json.routes.length)
-      const safetyScores = await scoreAllRoutes(json.routes)
-
-      const built: RouteData[] = json.routes.map((r: RawRoute, i: number) => ({
-        index: i,
-        distance: r.distance,
-        duration: r.duration,
-        coordinates: r.geometry.coordinates,
-        safetyScore: safetyScores[i],
-        color: colors[i],
-      }))
-
-      built.sort((a, b) =>
-        b.safetyScore !== a.safetyScore
-          ? b.safetyScore - a.safetyScore
-          : a.distance - b.distance
-      )
-
-      setRoutes(built)
-      onRoutesChange(built)
-      onActiveChange(built[0].index)
-    } catch {
-      setError('Failed to fetch routes. Check your connection.')
-    } finally {
-      setFetching(false)
-    }
-  }, [onRoutesChange, onActiveChange])
-
-  const fetchRoutes = useCallback(async (dest: NominatimResult) => {
-    setFetching(true)
-    setError(null)
-    setRoutes([])
-    onRoutesChange([])
-
-    if (userPos) {
-      // Use the already-acquired GPS position — no wait
-      await doFetch(userPos[0], userPos[1], dest)
-    } else {
-      navigator.geolocation.getCurrentPosition(
-        async pos => { await doFetch(pos.coords.latitude, pos.coords.longitude, dest) },
-        () => { setError('Location access denied. Enable GPS to compare routes.'); setFetching(false) }
-      )
-    }
-  }, [userPos, doFetch, onRoutesChange])
-
-  // Auto-fetch when a destination is pushed in from the search bar PlaceCard
-  useEffect(() => {
-    if (preFilledDest && isOpen) {
-      setDest(preFilledDest)
-      fetchRoutes(preFilledDest)
-      onDestChange?.([parseFloat(preFilledDest.lat), parseFloat(preFilledDest.lon)])
-      onPreFilledConsumed?.()
-    }
-  }, [preFilledDest, isOpen, fetchRoutes, onPreFilledConsumed, onDestChange])
-
-  const handleDestSelect = (r: NominatimResult) => {
-    setDest(r)
-    fetchRoutes(r)
-    onDestChange?.([parseFloat(r.lat), parseFloat(r.lon)])
-  }
-
-  // Full close — clears routes from map
-  const handleClose = () => {
-    setRoutes([])
-    setDest(null)
-    setError(null)
-    onRoutesChange([])
-    onActiveChange(null)
-    onDestChange?.(null)
-    onClose()
-  }
-
-  return (
-    <>
-      {/* Backdrop — only when expanded */}
-      {isOpen && expanded && (
-        <div className="fixed inset-0 bg-black/30 z-[900]" onClick={onMinimize} />
-      )}
-
-      {/* Minimized pill — always in DOM when open, shown only when !expanded */}
-      {isOpen && !expanded && (
-        <div className="fixed bottom-[172px] left-4 right-20 z-[950] bg-white rounded-2xl shadow-2xl px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-2 flex-1 min-w-0">
-            {routes.map(r => (
-              <button
-                key={r.index}
-                onClick={() => onActiveChange(r.index)}
-                title={`Route ${r.index + 1}`}
-                className="rounded-full transition-all flex-shrink-0"
-                style={{
-                  width: activeIndex === r.index ? 16 : 12,
-                  height: activeIndex === r.index ? 16 : 12,
-                  background: r.color,
-                  opacity: activeIndex === r.index || activeIndex === null ? 1 : 0.35,
-                }}
-              />
-            ))}
-            <span className="text-sm font-medium text-secondary ml-1 truncate">
-              {routes.length > 0
-                ? `${routes.length} route${routes.length > 1 ? 's' : ''} on map`
-                : 'Routes'}
-            </span>
-          </div>
-          <div className="flex items-center gap-2 flex-shrink-0">
-            <span className="text-xs text-gray-400">Tap ROUTES to expand</span>
-            <button onClick={handleClose} className="text-gray-400 hover:text-gray-600 ml-1">
-              <svg viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5">
-                <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
-              </svg>
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Full sheet — always in DOM, CSS transitions between hidden/visible */}
-      <div
-        className={`fixed bottom-0 left-0 right-0 z-[950] bg-white rounded-t-3xl shadow-2xl bottom-sheet ${
-          isOpen && expanded ? 'bottom-sheet-visible' : 'bottom-sheet-hidden'
-        }`}
-        style={{ maxHeight: '80vh', overflowY: 'auto' }}
-        onClick={e => e.stopPropagation()}
-      >
-        <div className="max-w-[480px] mx-auto px-5 py-6 pb-24">
-          <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-5" />
-
-          <div className="flex items-center justify-between mb-5">
-            <div>
-              <h2 className="text-lg font-bold text-secondary">Compare Routes</h2>
-              <p className="text-xs text-gray-400 mt-0.5">Ranked by safety score</p>
-            </div>
-            <div className="flex items-center gap-1">
-              {/* Minimise button */}
-              <button
-                onClick={onMinimize}
-                className="text-gray-400 hover:text-gray-600 p-1"
-                aria-label="Minimise"
-              >
-                <svg viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5">
-                  <path d="M19 13H5v-2h14v2z" />
-                </svg>
-              </button>
-              {/* Close button */}
-              <button onClick={handleClose} className="text-gray-400 hover:text-gray-600 p-1">
-                <svg viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6">
-                  <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
-                </svg>
-              </button>
-            </div>
-          </div>
-
-          {/* Origin / Dest */}
-          <div className="bg-gray-50 rounded-2xl p-3 mb-4">
-            <div className="flex items-center gap-3 mb-2">
-              <div className="w-2 h-2 rounded-full bg-safe flex-shrink-0" />
-              <span className="text-sm text-secondary font-medium">{originLabel}</span>
-            </div>
-            <div className="ml-2.5 w-px h-3 bg-gray-300 mb-2" />
-            <div className="flex items-center gap-3">
-              <div className="w-2 h-2 rounded-full bg-primary flex-shrink-0" />
-              <div className="flex-1">
-                <DestSearch onSelect={handleDestSelect} mapCenter={mapCenter} />
-              </div>
-            </div>
-          </div>
-
-          {fetching && (
-            <div className="flex flex-col items-center py-8 gap-3">
-              <div className="w-8 h-8 border-3 border-accent border-t-transparent rounded-full animate-spin" />
-              <p className="text-sm text-gray-500">Finding safest routes...</p>
-            </div>
-          )}
-
-          {error && !fetching && (
-            <div className="bg-primary/5 rounded-xl px-4 py-3 text-sm text-primary">
-              {error}
-            </div>
-          )}
-
-          {!fetching && routes.length > 0 && (
-            <div className="flex flex-col gap-3">
-              {routes.map((route, rank) => {
-                const isActive = activeIndex === route.index
-                const distKm = route.distance / 1000
-                return (
-                  <button
-                    key={route.index}
-                    onClick={() => onActiveChange(isActive ? null : route.index)}
-                    className={`w-full text-left rounded-2xl border-2 p-4 transition-all active:scale-[0.98] ${
-                      isActive ? 'shadow-md' : 'border-gray-100 bg-white hover:border-gray-200'
-                    }`}
-                    style={isActive
-                      ? { borderColor: route.color, backgroundColor: `${route.color}18` }
-                      : {}
-                    }
-                  >
-                    <div className="flex items-center justify-between mb-2">
-                      <div className="flex items-center gap-2">
-                        <span
-                          className="w-3.5 h-3.5 rounded-full flex-shrink-0"
-                          style={{ background: route.color }}
-                        />
-                        <span className="font-bold text-secondary text-sm">
-                          Route {String.fromCharCode(65 + rank)}
-                          {rank === 0 && (
-                            <span className="ml-1.5 text-[10px] bg-safe/10 text-safe font-semibold px-1.5 py-0.5 rounded-full">
-                              Best
-                            </span>
-                          )}
-                        </span>
-                      </div>
-                      <SafetyBadge score={route.safetyScore} />
-                    </div>
-
-                    <div className="flex gap-4 text-xs text-gray-500">
-                      <span className="flex items-center gap-1">
-                        <svg viewBox="0 0 24 24" fill="currentColor" className="w-3.5 h-3.5 text-accent">
-                          <path d="M20.5 3l-.16.03L15 5.1 9 3 3.36 4.9c-.21.07-.36.25-.36.48V20.5c0 .28.22.5.5.5l.16-.03L9 18.9l6 2.1 5.64-1.9c.21-.07.36-.25.36-.48V3.5c0-.28-.22-.5-.5-.5z" />
-                        </svg>
-                        {formatDistance(distKm)}
-                      </span>
-                      <span className="flex items-center gap-1">
-                        <svg viewBox="0 0 24 24" fill="currentColor" className="w-3.5 h-3.5 text-accent">
-                          <path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zm.01 18c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67V7z" />
-                        </svg>
-                        {formatWalkTime(distKm)}
-                      </span>
-                      <span className="flex items-center gap-1">
-                        <svg viewBox="0 0 24 24" fill="currentColor" className="w-3.5 h-3.5 text-safe">
-                          <path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z" />
-                        </svg>
-                        Safety {route.safetyScore.toFixed(1)}/5
-                      </span>
-                    </div>
-                  </button>
-                )
-              })}
-
-              <p className="text-xs text-gray-400 text-center pt-1">
-                Tap a route to highlight it · tap − to minimise
-              </p>
-            </div>
-          )}
-
-          {!fetching && !error && routes.length === 0 && destination === null && (
-            <div className="flex flex-col items-center py-6 gap-2 text-center">
-              <div className="w-14 h-14 bg-accent/10 rounded-full flex items-center justify-center mb-2">
-                <svg viewBox="0 0 24 24" fill="#457B9D" className="w-7 h-7">
-                  <path d="M20.5 3l-.16.03L15 5.1 9 3 3.36 4.9c-.21.07-.36.25-.36.48V20.5c0 .28.22.5.5.5l.16-.03L9 18.9l6 2.1 5.64-1.9c.21-.07.36-.25.36-.48V3.5c0-.28-.22-.5-.5-.5z" />
-                </svg>
-              </div>
-              <p className="text-sm font-medium text-secondary">Search a destination above</p>
-              <p className="text-xs text-gray-400">We'll rank routes by safety score using crowd-sourced data</p>
-            </div>
-          )}
-        </div>
-      </div>
-    </>
   )
 }

@@ -1,6 +1,6 @@
-declare module 'leaflet.heat' {
-  import * as L from 'leaflet'
+import 'leaflet'
 
+declare module 'leaflet' {
   interface HeatLayerOptions {
     minOpacity?: number
     maxZoom?: number
@@ -10,16 +10,13 @@ declare module 'leaflet.heat' {
     gradient?: Record<number, string>
   }
 
-  type HeatLatLngTuple = [number, number, number?]
-
-  interface HeatLayer extends L.Layer {
-    setLatLngs(latlngs: HeatLatLngTuple[]): this
-    addLatLng(latlng: HeatLatLngTuple): this
-    setOptions(options: HeatLayerOptions): this
+  interface HeatLayer extends Layer {
+    setLatLngs(latlngs: Array<[number, number, number]>): this
     redraw(): this
   }
 
-  function heatLayer(latlngs: HeatLatLngTuple[], options?: HeatLayerOptions): HeatLayer
-
-  export { heatLayer, HeatLayer, HeatLayerOptions, HeatLatLngTuple }
+  function heatLayer(
+    latlngs: Array<[number, number, number]>,
+    options?: HeatLayerOptions
+  ): HeatLayer
 }

@@ -1,17 +1,25 @@
-import { Navigate } from 'react-router-dom'
+import { Navigate, Outlet } from 'react-router-dom'
 import { useAuth } from '../lib/auth'
+import Navbar from './Navbar'
 
-export default function ProtectedRoute({ children }: { children: React.ReactNode }) {
+export default function ProtectedRoute() {
   const { session, loading } = useAuth()
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-screen bg-background">
-        <div className="w-10 h-10 border-4 border-secondary border-t-primary rounded-full animate-spin" />
+      <div className="flex h-full items-center justify-center">
+        <p className="text-mist-400">Loading…</p>
       </div>
     )
   }
-
   if (!session) return <Navigate to="/auth" replace />
-  return <>{children}</>
+
+  return (
+    <div className="flex h-full flex-col">
+      <div className="min-h-0 flex-1">
+        <Outlet />
+      </div>
+      <Navbar />
+    </div>
+  )
 }

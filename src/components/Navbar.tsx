@@ -1,87 +1,48 @@
-import { NavLink, useLocation } from 'react-router-dom'
+import { NavLink } from 'react-router-dom'
 
-const HomeIcon = () => (
-  <svg viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6">
-    <path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z" />
-  </svg>
-)
-
-const MapIcon = () => (
-  <svg viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6">
-    <path d="M20.5 3l-.16.03L15 5.1 9 3 3.36 4.9c-.21.07-.36.25-.36.48V20.5c0 .28.22.5.5.5l.16-.03L9 18.9l6 2.1 5.64-1.9c.21-.07.36-.25.36-.48V3.5c0-.28-.22-.5-.5-.5zM15 19l-6-2.11V5l6 2.11V19z" />
-  </svg>
-)
-
-const SOSIcon = () => (
-  <svg viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6">
-    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z" />
-  </svg>
-)
-
-const ProfileIcon = () => (
-  <svg viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6">
-    <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" />
-  </svg>
-)
+const tabs = [
+  {
+    to: '/map',
+    label: 'Map',
+    icon: (
+      <path d="M9 2 3 4.5v15L9 17l6 2.5 6-2.5v-15L15 4.5 9 2zm0 2.3 6 2.5v12.9l-6-2.5V4.3z" />
+    ),
+  },
+  {
+    to: '/sos',
+    label: 'SOS',
+    icon: (
+      <path d="M12 2a7 7 0 0 0-7 7c0 5.25 7 13 7 13s7-7.75 7-13a7 7 0 0 0-7-7zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5z" />
+    ),
+  },
+  {
+    to: '/profile',
+    label: 'Profile',
+    icon: (
+      <path d="M12 12a5 5 0 1 0-5-5 5 5 0 0 0 5 5zm0 2c-3.34 0-10 1.67-10 5v3h20v-3c0-3.33-6.66-5-10-5z" />
+    ),
+  },
+]
 
 export default function Navbar() {
-  const location = useLocation()
-  const hide = ['/', '/auth'].includes(location.pathname)
-  if (hide) return null
-
   return (
-    <nav className="fixed bottom-0 left-0 right-0 z-50 bg-white border-t border-gray-200 safe-area-bottom shadow-lg">
-      <div className="max-w-[480px] mx-auto flex items-center justify-around h-16">
+    <nav className="flex justify-around border-t border-night-600 bg-night-800 pb-[env(safe-area-inset-bottom)]">
+      {tabs.map(tab => (
         <NavLink
-          to="/"
+          key={tab.to}
+          to={tab.to}
           className={({ isActive }) =>
-            `flex flex-col items-center gap-0.5 px-4 py-1 rounded-xl transition-colors ${
-              isActive ? 'text-secondary' : 'text-gray-400 hover:text-gray-600'
+            `flex flex-col items-center gap-0.5 px-6 py-2.5 text-xs font-medium transition-colors ${
+              isActive ? 'text-lamp-400' : 'text-mist-400 hover:text-mist-100'
             }`
           }
         >
-          <HomeIcon />
-          <span className="text-[10px] font-medium">Home</span>
+          <svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5" aria-hidden>
+            {tab.icon}
+          </svg>
+          {tab.label}
         </NavLink>
-
-        <NavLink
-          to="/map"
-          className={({ isActive }) =>
-            `flex flex-col items-center gap-0.5 px-4 py-1 rounded-xl transition-colors ${
-              isActive ? 'text-accent' : 'text-gray-400 hover:text-gray-600'
-            }`
-          }
-        >
-          <MapIcon />
-          <span className="text-[10px] font-medium">Map</span>
-        </NavLink>
-
-        <NavLink
-          to="/sos"
-          className={({ isActive }) =>
-            `flex flex-col items-center gap-0.5 px-4 py-1 rounded-xl transition-colors ${
-              isActive ? 'text-primary' : 'text-primary/70 hover:text-primary'
-            }`
-          }
-        >
-          <div className="w-12 h-12 bg-primary rounded-full flex items-center justify-center shadow-md -mt-6 border-4 border-white">
-            <SOSIcon />
-          </div>
-          <span className="text-[10px] font-medium text-primary">SOS</span>
-        </NavLink>
-
-        <NavLink
-          to="/profile"
-          className={({ isActive }) =>
-            `flex flex-col items-center gap-0.5 px-4 py-1 rounded-xl transition-colors ${
-              isActive ? 'text-secondary' : 'text-gray-400 hover:text-gray-600'
-            }`
-          }
-        >
-          <ProfileIcon />
-          <span className="text-[10px] font-medium">Profile</span>
-        </NavLink>
-      </div>
+      ))}
     </nav>
   )
 }

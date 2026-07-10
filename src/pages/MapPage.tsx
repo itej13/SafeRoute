@@ -1,211 +1,109 @@
-import { useState, useCallback, useEffect, useRef } from 'react'
-import { MapContainer, TileLayer, Marker, useMapEvents, useMap } from 'react-leaflet'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { MapContainer, TileLayer, Marker, useMap, useMapEvents } from 'react-leaflet'
 import L from 'leaflet'
+import { supabase } from '../lib/supabase'
+import { fetchDelhiCrimeIndex, crimeForDistrict, type DistrictCrime } from '../lib/crimeData'
+import { findDistrict } from '../lib/geo'
 import HeatmapLayer from '../components/HeatmapLayer'
 import RatingPanel from '../components/RatingPanel'
+import AreaSafetyCard from '../components/AreaSafetyCard'
 import SOSButton from '../components/SOSButton'
-import RouteComparisonSheet, { RoutePolylines } from '../components/RouteComparison'
-import { haversine, formatDistance } from '../lib/geo'
-import type { NominatimResult, RouteData } from '../lib/types'
+import { useRouteComparison, RoutePolylines, RouteSheet } from '../components/RouteComparison'
+import type { PhotonFeature, Rating } from '../lib/types'
 
-delete (L.Icon.Default.prototype as unknown as Record<string, unknown>)._getIconUrl
-L.Icon.Default.mergeOptions({
-  iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
-  iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
-  shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
-})
+const DELHI_CENTER: [number, number] = [28.6139, 77.209]
 
-const DTU_CENTER: [number, number] = [28.7501, 77.1177]
-
-// Blue dot — current user location
-const userLocationIcon = L.divIcon({
-  html: `<div style="width:18px;height:18px;background:#4285F4;border:3px solid white;border-radius:50%;box-shadow:0 2px 6px rgba(0,0,0,0.4)"></div>`,
+const userIcon = L.divIcon({
+  html: '<div style="width:18px;height:18px;background:#4285F4;border:3px solid white;border-radius:50%;box-shadow:0 2px 6px rgba(0,0,0,.4)"></div>',
   className: '',
   iconSize: [18, 18],
   iconAnchor: [9, 9],
 })
 
-// Red teardrop — destination (Google Maps style)
 const destinationIcon = L.divIcon({
-  html: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 36" width="28" height="36"><path fill="#E63946" stroke="white" stroke-width="1.5" d="M12 0C5.373 0 0 5.373 0 12c0 9 12 24 12 24S24 21 24 12C24 5.373 18.627 0 12 0z"/><circle fill="white" cx="12" cy="12" r="5"/></svg>`,
+  html: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 36" width="28" height="36"><path fill="#E4576B" stroke="white" stroke-width="1.5" d="M12 0C5.4 0 0 5.4 0 12c0 9 12 24 12 24s12-15 12-24C24 5.4 18.6 0 12 0z"/><circle fill="white" cx="12" cy="12" r="5"/></svg>',
   className: '',
   iconSize: [28, 36],
   iconAnchor: [14, 36],
 })
 
-// ── Map click handler ─────────────────────────────────────────────────────────
-
-function ClickHandler({ onMapClick }: { onMapClick: (lat: number, lng: number) => void }) {
+function MapClickHandler({ onClick }: { onClick: (lat: number, lng: number) => void }) {
   useMapEvents({
     click(e) {
-      const target = (e.originalEvent?.target as HTMLElement)
+      const target = e.originalEvent?.target as HTMLElement | null
       if (target?.closest('[data-no-map-click]')) return
-      onMapClick(e.latlng.lat, e.latlng.lng)
+      onClick(e.latlng.lat, e.latlng.lng)
     },
   })
   return null
 }
 
-// ── GPS fly-to button ─────────────────────────────────────────────────────────
-
-function FlyToControl() {
+function SearchBar({
+  center,
+  onSelect,
+}: {
+  center: [number, number]
+  onSelect: (lat: number, lng: number) => void
+}) {
   const map = useMap()
-  return (
-    <button
-      onClick={() =>
-        navigator.geolocation.getCurrentPosition(
-          p => map.flyTo([p.coords.latitude, p.coords.longitude], 17, { duration: 1.5 }),
-          () => {}
-        )
-      }
-      className="absolute bottom-36 left-4 z-[1000] w-11 h-11 bg-white rounded-full shadow-lg flex items-center justify-center active:scale-95 transition-all"
-      aria-label="My location"
-    >
-      <svg viewBox="0 0 24 24" fill="#1D3557" className="w-5 h-5">
-        <path d="M12 8c-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4-1.79-4-4-4zm8.94 3A8.994 8.994 0 0013 3.06V1h-2v2.06A8.994 8.994 0 003.06 11H1v2h2.06A8.994 8.994 0 0011 20.94V23h2v-2.06A8.994 8.994 0 0020.94 13H23v-2h-2.06zM12 19c-3.87 0-7-3.13-7-7s3.13-7 7-7 7 3.13 7 7-3.13 7-7 7z" />
-      </svg>
-    </button>
-  )
-}
+  const [query, setQuery] = useState('')
+  const [results, setResults] = useState<PhotonFeature[]>([])
+  const abortRef = useRef<AbortController | null>(null)
 
-// ── Search bar with autocomplete + distance display ───────────────────────────
-
-interface SearchBarProps {
-  onLocationSelected: (r: NominatimResult) => void
-}
-
-function SearchBar({ onLocationSelected }: SearchBarProps) {
-  const map = useMap()
-  const [query, setQuery]       = useState('')
-  const [results, setResults]   = useState<NominatimResult[]>([])
-  const [loading, setLoading]   = useState(false)
-  const [distLabel, setDistLabel] = useState<string | null>(null)
-  const [open, setOpen]         = useState(false)
-  const debounceRef = useRef<ReturnType<typeof setTimeout>>()
-  const containerRef = useRef<HTMLDivElement>(null)
-
-  // Debounced Photon geocoder — fuzzy, proximity-biased
   useEffect(() => {
-    clearTimeout(debounceRef.current)
-    if (query.length < 2) { setResults([]); setOpen(false); return }
-    debounceRef.current = setTimeout(async () => {
-      setLoading(true)
+    const q = query.trim()
+    if (q.length < 3) {
+      setResults([])
+      return
+    }
+    const timer = setTimeout(async () => {
+      abortRef.current?.abort()
+      const controller = new AbortController()
+      abortRef.current = controller
       try {
-        const center = map.getCenter()
         const res = await fetch(
-          `https://photon.komoot.io/api/?q=${encodeURIComponent(query)}&limit=5&lat=${center.lat}&lon=${center.lng}&lang=en`
+          `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=5&lat=${center[0]}&lon=${center[1]}`,
+          { signal: controller.signal }
         )
-        const json = await res.json()
-        const data: NominatimResult[] = (json.features ?? []).map((f: { properties: Record<string, string>; geometry: { coordinates: [number, number] } }) => ({
-          place_id: Number(f.properties.osm_id) || Math.floor(Math.random() * 1e9),
-          display_name: [f.properties.name, f.properties.street, f.properties.city || f.properties.district, f.properties.state, f.properties.country].filter(Boolean).join(', '),
-          lat: String(f.geometry.coordinates[1]),
-          lon: String(f.geometry.coordinates[0]),
-        }))
-        setResults(data)
-        setOpen(data.length > 0)
+        if (!res.ok) return
+        const data: { features?: PhotonFeature[] } = await res.json()
+        setResults(data.features ?? [])
       } catch {
-        // silent
-      } finally {
-        setLoading(false)
+        // aborted or offline — keep previous results
       }
-    }, 250)
-    return () => clearTimeout(debounceRef.current)
-  }, [query, map])
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [query, center])
 
-  // Prevent map zoom when scrolling inside the dropdown
-  useEffect(() => {
-    if (containerRef.current) {
-      L.DomEvent.disableScrollPropagation(containerRef.current)
-    }
-  }, [])
-
-  // Close dropdown on outside click
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [])
-
-  const selectResult = (r: NominatimResult) => {
-    const lat = parseFloat(r.lat)
-    const lng = parseFloat(r.lon)
-    map.flyTo([lat, lng], 16, { duration: 1.5 })
-    setQuery(r.display_name.split(',')[0])
-    setOpen(false)
+  const pick = (f: PhotonFeature) => {
+    const [lng, lat] = f.geometry.coordinates
+    setQuery('')
     setResults([])
-    onLocationSelected(r)
-
-    // Compute distance from current GPS
-    setDistLabel(null)
-    navigator.geolocation.getCurrentPosition(pos => {
-      const km = haversine(pos.coords.latitude, pos.coords.longitude, lat, lng)
-      setDistLabel(`${formatDistance(km)} from you`)
-    })
+    map.flyTo([lat, lng], 15, { duration: 1 })
+    onSelect(lat, lng)
   }
 
+  const labelOf = (f: PhotonFeature) =>
+    [f.properties.name, f.properties.street, f.properties.city].filter(Boolean).join(', ')
+
   return (
-    <div
-      ref={containerRef}
-      className="absolute top-4 left-4 right-4 z-[1000]"
-      data-no-map-click
-    >
-      {/* Input row */}
-      <div className="flex gap-2">
-        <div className="flex-1 relative">
-          <input
-            type="text"
-            value={query}
-            onChange={e => { setQuery(e.target.value); setDistLabel(null) }}
-            onFocus={() => results.length > 0 && setOpen(true)}
-            placeholder="Search a place..."
-            className="w-full bg-white rounded-2xl pl-4 pr-10 py-3 text-sm text-secondary shadow-lg outline-none placeholder-gray-400 border border-gray-100 focus:ring-2 focus:ring-accent"
-          />
-          {loading && (
-            <div className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 border-2 border-accent border-t-transparent rounded-full animate-spin" />
-          )}
-          {!loading && query && (
-            <button
-              onClick={() => { setQuery(''); setResults([]); setOpen(false); setDistLabel(null) }}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400"
-            >
-              <svg viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4">
-                <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
-              </svg>
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Distance chip */}
-      {distLabel && (
-        <div className="mt-2 ml-1 inline-flex items-center gap-1.5 bg-white/95 backdrop-blur-sm rounded-full px-3 py-1 shadow text-xs text-accent font-medium">
-          <svg viewBox="0 0 24 24" fill="currentColor" className="w-3.5 h-3.5">
-            <path d="M20.5 3l-.16.03L15 5.1 9 3 3.36 4.9c-.21.07-.36.25-.36.48V20.5c0 .28.22.5.5.5l.16-.03L9 18.9l6 2.1 5.64-1.9c.21-.07.36-.25.36-.48V3.5c0-.28-.22-.5-.5-.5z" />
-          </svg>
-          {distLabel}
-        </div>
-      )}
-
-      {/* Autocomplete dropdown */}
-      {open && results.length > 0 && (
-        <ul className="mt-2 bg-white rounded-2xl shadow-xl border border-gray-100 overflow-hidden">
-          {results.map(r => (
-            <li key={r.place_id}>
+    <div data-no-map-click className="absolute inset-x-4 top-4 z-[1000] ml-auto max-w-md">
+      <input
+        value={query}
+        onChange={e => setQuery(e.target.value)}
+        placeholder="Where to?"
+        aria-label="Search destination"
+        className="w-full rounded-xl border border-night-600 bg-night-800/95 px-4 py-3 text-sm shadow-lg placeholder:text-mist-400 focus:border-lamp-400 focus:outline-none"
+      />
+      {results.length > 0 && (
+        <ul className="mt-1 overflow-hidden rounded-xl border border-night-600 bg-night-800 shadow-lg">
+          {results.map(f => (
+            <li key={f.properties.osm_id}>
               <button
-                onClick={() => selectResult(r)}
-                className="w-full text-left px-4 py-3 hover:bg-gray-50 active:bg-gray-100 border-b border-gray-50 last:border-0 transition-colors"
+                onClick={() => pick(f)}
+                className="w-full px-4 py-2.5 text-left text-sm hover:bg-night-700"
               >
-                <p className="text-sm font-medium text-secondary truncate">
-                  {r.display_name.split(',')[0]}
-                </p>
-                <p className="text-xs text-gray-400 truncate mt-0.5">
-                  {r.display_name.split(',').slice(1, 3).join(', ')}
-                </p>
+                {labelOf(f)}
               </button>
             </li>
           ))}
@@ -215,210 +113,88 @@ function SearchBar({ onLocationSelected }: SearchBarProps) {
   )
 }
 
-// ── Place action card (shown after search selection) ─────────────────────────
-
-function PlaceCard({
-  place,
-  onRate,
-  onDirections,
-  onClose,
-}: {
-  place: NominatimResult
-  onRate: () => void
-  onDirections: () => void
-  onClose: () => void
-}) {
-  const parts = place.display_name.split(',')
-  const name = parts[0]
-  const address = parts.slice(1, 3).join(', ')
-
-  return (
-    <div className="fixed bottom-[72px] left-4 right-4 z-[1001] bg-white rounded-2xl shadow-2xl p-4">
-      <div className="flex items-start justify-between mb-3">
-        <div className="flex-1 min-w-0 pr-3">
-          <p className="font-bold text-secondary text-base truncate">{name}</p>
-          {address && <p className="text-xs text-gray-400 mt-0.5 truncate">{address}</p>}
-        </div>
-        <button onClick={onClose} className="text-gray-400 flex-shrink-0 p-1">
-          <svg viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5">
-            <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
-          </svg>
-        </button>
-      </div>
-      <div className="flex gap-3">
-        <button
-          onClick={onRate}
-          className="flex-1 py-2.5 rounded-xl bg-accent/10 text-accent font-semibold text-sm flex items-center justify-center gap-2 active:scale-95 transition-transform"
-        >
-          <svg viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4">
-            <path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z" />
-          </svg>
-          Rate Place
-        </button>
-        <button
-          onClick={onDirections}
-          className="flex-1 py-2.5 rounded-xl bg-secondary text-white font-semibold text-sm flex items-center justify-center gap-2 active:scale-95 transition-transform"
-        >
-          <svg viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4">
-            <path d="M21.71 11.29l-9-9c-.39-.39-1.02-.39-1.41 0l-9 9c-.39.39-.39 1.02 0 1.41l9 9c.39.39 1.02.39 1.41 0l9-9c.39-.38.39-1.01 0-1.41zM14 14.5V12h-4v3H8v-4c0-.55.45-1 1-1h5V7.5l3.5 3.5-3.5 3.5z" />
-          </svg>
-          Directions
-        </button>
-      </div>
-    </div>
-  )
-}
-
-// ── Routes FAB ────────────────────────────────────────────────────────────────
-
-function RoutesFAB({ onClick, active }: { onClick: () => void; active: boolean }) {
-  return (
-    <button
-      onClick={onClick}
-      className={`fixed bottom-44 right-4 z-[999] w-16 h-16 text-white rounded-full shadow-xl flex flex-col items-center justify-center gap-0.5 active:scale-95 transition-all ${
-        active ? 'bg-accent ring-2 ring-white ring-offset-2 ring-offset-accent' : 'bg-secondary'
-      }`}
-      aria-label="Compare routes"
-    >
-      <svg viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5">
-        <path d="M20.5 3l-.16.03L15 5.1 9 3 3.36 4.9c-.21.07-.36.25-.36.48V20.5c0 .28.22.5.5.5l.16-.03L9 18.9l6 2.1 5.64-1.9c.21-.07.36-.25.36-.48V3.5c0-.28-.22-.5-.5-.5zM15 19l-6-2.11V5l6 2.11V19z" />
-      </svg>
-      <span className="text-[9px] font-bold leading-none">ROUTES</span>
-    </button>
-  )
-}
-
-// ── Page ──────────────────────────────────────────────────────────────────────
-
 export default function MapPage() {
-  const [selectedPoint, setSelectedPoint]   = useState<{ lat: number; lng: number } | null>(null)
-  const [searchedPlace, setSearchedPlace]   = useState<NominatimResult | null>(null)
-  const [preFilledDest, setPreFilledDest]   = useState<NominatimResult | null>(null)
-  const [refreshKey, setRefreshKey]         = useState(0)
-  const [routeCompareOpen, setRouteCompareOpen] = useState(false)
-  const [sheetExpanded, setSheetExpanded]   = useState(true)
-  const [routes, setRoutes]                 = useState<RouteData[]>([])
-  const [activeRouteIdx, setActiveRouteIdx] = useState<number | null>(null)
-  const [userPos, setUserPos]               = useState<[number, number] | null>(null)
-  const [destMarkerPos, setDestMarkerPos]   = useState<[number, number] | null>(null)
+  const [userPos, setUserPos] = useState<[number, number] | null>(null)
+  const [center, setCenter] = useState<[number, number] | null>(null)
+  const [destination, setDestination] = useState<[number, number] | null>(null)
+  const [ratingPoint, setRatingPoint] = useState<[number, number] | null>(null)
+  const [ratings, setRatings] = useState<Rating[]>([])
+  const [crimeIndex, setCrimeIndex] = useState<Map<string, DistrictCrime> | null>(null)
 
-  // Track user GPS location continuously
+  // Resolve GPS before mounting the map — MapContainer's center is fixed at mount
   useEffect(() => {
-    if (!navigator.geolocation) return
-    const id = navigator.geolocation.watchPosition(
-      p => setUserPos([p.coords.latitude, p.coords.longitude]),
-      () => {}
+    navigator.geolocation.getCurrentPosition(
+      p => {
+        const pos: [number, number] = [p.coords.latitude, p.coords.longitude]
+        setUserPos(pos)
+        setCenter(pos)
+      },
+      () => setCenter(DELHI_CENTER),
+      { timeout: 5000, maximumAge: 60000 }
     )
-    return () => navigator.geolocation.clearWatch(id)
   }, [])
 
-  const handleMapClick = useCallback((lat: number, lng: number) => {
-    if (!routeCompareOpen) {
-      setSelectedPoint({ lat, lng })
-      setSearchedPlace(null)
-    }
-  }, [routeCompareOpen])
+  const loadRatings = useCallback(async () => {
+    // ponytail: loads all ratings; switch to viewport-bounded queries when rows grow
+    const { data } = await supabase.from('ratings').select('*')
+    setRatings(data ?? [])
+  }, [])
 
-  const handleSubmitted = useCallback(() => setRefreshKey(k => k + 1), [])
+  useEffect(() => {
+    loadRatings()
+    fetchDelhiCrimeIndex().then(setCrimeIndex)
+  }, [loadRatings])
+
+  // Route origin falls back to map center so search still works without GPS
+  const { routes, loading: routesLoading } = useRouteComparison(userPos ?? center, destination, crimeIndex)
+
+  const areaCrime = userPos
+    ? crimeForDistrict(crimeIndex, findDistrict(userPos[0], userPos[1]))
+    : null
+
+  if (!center) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-2">
+        <p className="font-display text-lg">Finding you…</p>
+        <p className="text-sm text-mist-400">Allow location access to center the map on you</p>
+      </div>
+    )
+  }
 
   return (
-    <div className="fixed inset-0" style={{ paddingBottom: '64px' }}>
-      <MapContainer
-        center={DTU_CENTER}
-        zoom={15}
-        zoomControl={false}
-        className="w-full h-full"
-        style={{ zIndex: 1 }}
-      >
+    <div className="relative h-full">
+      <MapContainer center={center} zoom={15} zoomControl={false} className="h-full">
         <TileLayer
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+          url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
-        <HeatmapLayer refreshKey={refreshKey} />
-        <ClickHandler onMapClick={handleMapClick} />
-        <SearchBar onLocationSelected={r => {
-          setSearchedPlace(r)
-          setSelectedPoint(null)
-          setDestMarkerPos([parseFloat(r.lat), parseFloat(r.lon)])
-        }} />
-        <FlyToControl />
-        <RoutePolylines routes={routes} activeIndex={activeRouteIdx} />
-        {userPos && (
-          <Marker position={userPos} icon={userLocationIcon} />
-        )}
-        {destMarkerPos && (
-          <Marker position={destMarkerPos} icon={destinationIcon} />
-        )}
+        <MapClickHandler onClick={(lat, lng) => setRatingPoint([lat, lng])} />
+        <SearchBar center={center} onSelect={(lat, lng) => setDestination([lat, lng])} />
+        <HeatmapLayer ratings={ratings} />
+        {userPos && <Marker position={userPos} icon={userIcon} />}
+        {destination && <Marker position={destination} icon={destinationIcon} />}
+        {ratingPoint && <Marker position={ratingPoint} icon={destinationIcon} />}
+        <RoutePolylines routes={routes} />
       </MapContainer>
 
-      {/* Legend */}
-      <div className="absolute bottom-20 left-4 z-[999] bg-white/90 backdrop-blur-sm rounded-xl px-3 py-2 shadow-md text-xs">
-        <div className="flex items-center gap-1.5 mb-1">
-          <span className="w-3 h-3 rounded-full bg-[#2A9D8F] inline-block" />
-          <span className="text-gray-600">Safe</span>
-        </div>
-        <div className="flex items-center gap-1.5 mb-1">
-          <span className="w-3 h-3 rounded-full bg-[#e9c46a] inline-block" />
-          <span className="text-gray-600">Moderate</span>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <span className="w-3 h-3 rounded-full bg-[#E63946] inline-block" />
-          <span className="text-gray-600">Unsafe</span>
-        </div>
-      </div>
+      <AreaSafetyCard crime={areaCrime} />
+      {!destination && !ratingPoint && <SOSButton />}
 
-      <RoutesFAB
-        active={routeCompareOpen}
-        onClick={() => {
-          if (routeCompareOpen) {
-            setSheetExpanded(true)   // re-expand if minimised
-          } else {
-            setRouteCompareOpen(true)
-            setSheetExpanded(true)
-          }
-        }}
-      />
-      <SOSButton />
-
-      {searchedPlace && (
-        <PlaceCard
-          place={searchedPlace}
-          onRate={() => {
-            setSelectedPoint({ lat: parseFloat(searchedPlace.lat), lng: parseFloat(searchedPlace.lon) })
-            setSearchedPlace(null)
+      {ratingPoint && (
+        <RatingPanel
+          lat={ratingPoint[0]}
+          lng={ratingPoint[1]}
+          onClose={() => setRatingPoint(null)}
+          onSaved={() => {
+            setRatingPoint(null)
+            loadRatings()
           }}
-          onDirections={() => {
-            setPreFilledDest(searchedPlace)
-            setDestMarkerPos([parseFloat(searchedPlace.lat), parseFloat(searchedPlace.lon)])
-            setSearchedPlace(null)
-            setRouteCompareOpen(true)
-            setSheetExpanded(true)
-          }}
-          onClose={() => { setSearchedPlace(null); setDestMarkerPos(null) }}
         />
       )}
 
-      <RatingPanel
-        lat={selectedPoint?.lat ?? null}
-        lng={selectedPoint?.lng ?? null}
-        onClose={() => setSelectedPoint(null)}
-        onSubmitted={handleSubmitted}
-      />
-
-      <RouteComparisonSheet
-        isOpen={routeCompareOpen}
-        expanded={sheetExpanded}
-        onClose={() => { setRouteCompareOpen(false); setSheetExpanded(true); setDestMarkerPos(null) }}
-        onMinimize={() => setSheetExpanded(false)}
-        onRoutesChange={setRoutes}
-        activeIndex={activeRouteIdx}
-        onActiveChange={setActiveRouteIdx}
-        mapCenter={DTU_CENTER}
-        userPos={userPos}
-        preFilledDest={preFilledDest}
-        onPreFilledConsumed={() => setPreFilledDest(null)}
-        onDestChange={pos => setDestMarkerPos(pos)}
-      />
+      {!ratingPoint && (
+        <RouteSheet routes={routes} loading={routesLoading} onClear={() => setDestination(null)} />
+      )}
     </div>
   )
 }

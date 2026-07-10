@@ -1,75 +1,35 @@
 import { useEffect, useRef } from 'react'
 import { useMap } from 'react-leaflet'
 import L from 'leaflet'
-import { supabase } from '../lib/supabase'
+import 'leaflet.heat'
+import type { Rating } from '../lib/types'
 
-type HeatLayerInstance = L.Layer & {
-  setLatLngs: (pts: [number, number, number][]) => void
-  redraw: () => void
-}
+// Weight: low safety score = hot spot. Score 1 → 1.0, score 5 → 0.2.
+const toPoint = (r: Rating): [number, number, number] => [r.lat, r.lng, (6 - r.score) / 5]
 
-interface Props {
-  refreshKey: number
-}
-
-export default function HeatmapLayer({ refreshKey }: Props) {
+export default function HeatmapLayer({ ratings }: { ratings: Rating[] }) {
   const map = useMap()
-  const heatRef = useRef<HeatLayerInstance | null>(null)
-  const loadedRef = useRef(false)
+  const layerRef = useRef<L.HeatLayer | null>(null)
 
   useEffect(() => {
-    let cancelled = false
-
-    async function load() {
-      // Load leaflet.heat once — it attaches L.heatLayer as a side-effect
-      if (!loadedRef.current) {
-        await import('leaflet.heat')
-        loadedRef.current = true
-      }
-
-      const { data, error } = await supabase
-        .from('ratings')
-        .select('lat, lng, safety_score')
-
-      if (cancelled || error || !data) return
-
-      const points: [number, number, number][] = data.map(r => [
-        r.lat,
-        r.lng,
-        (6 - r.safety_score) / 5, // invert: low safety = high intensity (red)
-      ])
-
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const lHeat = (L as any).heatLayer
-
-      if (heatRef.current) {
-        map.removeLayer(heatRef.current)
-      }
-
-      heatRef.current = lHeat(points, {
-        radius: 35,
-        blur: 25,
-        maxZoom: 17,
-        max: 1.0,
-        gradient: {
-          0.0: '#2A9D8F',
-          0.4: '#e9c46a',
-          0.7: '#f4a261',
-          1.0: '#E63946',
-        },
-      }).addTo(map)
-    }
-
-    load()
-
+    // leaflet.heat can't update options in place; create once, update points via setLatLngs
+    const layer = L.heatLayer([], {
+      radius: 28,
+      blur: 20,
+      maxZoom: 17,
+      gradient: { 0.2: '#3EC98E', 0.5: '#FFB648', 0.8: '#E4576B' },
+    })
+    layer.addTo(map)
+    layerRef.current = layer
     return () => {
-      cancelled = true
-      if (heatRef.current) {
-        map.removeLayer(heatRef.current)
-        heatRef.current = null
-      }
+      layer.remove()
+      layerRef.current = null
     }
-  }, [map, refreshKey])
+  }, [map])
+
+  useEffect(() => {
+    layerRef.current?.setLatLngs(ratings.map(toPoint))
+  }, [ratings])
 
   return null
 }
