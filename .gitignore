@@ -35,7 +35,10 @@ dist-ssr
 
 # Code review graph — generated index
 .code-review-graph/
+.understand-anything/
+graphify-out/
 
 # Internal docs
 *.docx
 *.pdf
+.vercel

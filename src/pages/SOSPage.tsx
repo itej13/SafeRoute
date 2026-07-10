@@ -33,13 +33,13 @@ export default function SOSPage() {
         const message = encodeURIComponent(
           `🚨 EMERGENCY! I need help. My location: ${mapsLink}`
         )
-        window.open(`https://wa.me/?text=${message}`, '_blank')
+        window.open(`https://wa.me/?text=${message}`, '_blank', 'noopener,noreferrer')
         setSent(true)
       },
       () => {
         // Fallback without coords
         const message = encodeURIComponent('🚨 EMERGENCY! I need help. Please call me immediately.')
-        window.open(`https://wa.me/?text=${message}`, '_blank')
+        window.open(`https://wa.me/?text=${message}`, '_blank', 'noopener,noreferrer')
         setSent(true)
       }
     )

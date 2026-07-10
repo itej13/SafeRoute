@@ -111,7 +111,7 @@ function SearchBar({ onLocationSelected }: SearchBarProps) {
       }
     }, 250)
     return () => clearTimeout(debounceRef.current)
-  }, [query])
+  }, [query, map])
 
   // Prevent map zoom when scrolling inside the dropdown
   useEffect(() => {
