@@ -17,6 +17,7 @@ create table public.ratings (
 );
 
 create index ratings_lat_lng_idx on public.ratings (lat, lng);
+create index ratings_user_id_idx on public.ratings (user_id);
 
 alter table public.ratings enable row level security;
 
@@ -25,15 +26,15 @@ create policy "authenticated can read ratings"
 
 create policy "users insert own ratings"
   on public.ratings for insert to authenticated
-  with check (user_id = auth.uid());
+  with check (user_id = (select auth.uid()));
 
 create policy "users update own ratings"
   on public.ratings for update to authenticated
-  using (user_id = auth.uid()) with check (user_id = auth.uid());
+  using (user_id = (select auth.uid())) with check (user_id = (select auth.uid()));
 
 create policy "users delete own ratings"
   on public.ratings for delete to authenticated
-  using (user_id = auth.uid());
+  using (user_id = (select auth.uid()));
 
 -- Per-user emergency contacts (private)
 create table public.emergency_contacts (
@@ -50,7 +51,7 @@ alter table public.emergency_contacts enable row level security;
 
 create policy "users manage own contacts"
   on public.emergency_contacts for all to authenticated
-  using (user_id = auth.uid()) with check (user_id = auth.uid());
+  using (user_id = (select auth.uid())) with check (user_id = (select auth.uid()));
 
 -- App is login-gated; anon needs no table access at all
 revoke all on public.ratings from anon;

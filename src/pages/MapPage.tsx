@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { MapContainer, TileLayer, Marker, Polygon, useMapEvents } from 'react-leaflet'
+import { MapContainer, TileLayer, Marker, Polygon, useMap, useMapEvents } from 'react-leaflet'
 import L from 'leaflet'
 import { supabase } from '../lib/supabase'
 import { crimeForDistrict } from '../lib/crimeData'
@@ -10,7 +10,7 @@ import RatingPanel from '../components/RatingPanel'
 import AreaSafetyCard from '../components/AreaSafetyCard'
 import SOSButton from '../components/SOSButton'
 import { useRouteComparison, RoutePolylines, RouteSheet } from '../components/RouteComparison'
-import type { PhotonFeature, Rating } from '../lib/types'
+import type { PhotonFeature, RatingPoint } from '../lib/types'
 
 const DELHI_CENTER: [number, number] = [28.6139, 77.209]
 
@@ -41,6 +41,52 @@ function MapClickHandler({ onClick }: { onClick: (lat: number, lng: number) => v
       const target = e.originalEvent?.target as HTMLElement | null
       if (target?.closest('[data-no-map-click]')) return
       onClick(e.latlng.lat, e.latlng.lng)
+    },
+  })
+  return null
+}
+
+// Loads only the ratings inside the (padded) viewport and refetches as the map
+// moves — per-user egress stays O(what's on screen), not O(table size).
+function RatingsLoader({
+  refreshKey,
+  onRatings,
+}: {
+  refreshKey: number
+  onRatings: (ratings: RatingPoint[]) => void
+}) {
+  const map = useMap()
+  const requestSeq = useRef(0)
+
+  const load = useCallback(async () => {
+    const seq = ++requestSeq.current
+    const b = map.getBounds().pad(0.2)
+    // Zero-area bounds = container not laid out yet; the deferred retry below refires
+    if (b.getSouth() === b.getNorth()) return
+    const { data, error } = await supabase
+      .from('ratings')
+      .select('id,lat,lng,score,utilities')
+      .gte('lat', b.getSouth())
+      .lte('lat', b.getNorth())
+      .gte('lng', b.getWest())
+      .lte('lng', b.getEast())
+      .limit(2500) // more points than a heatmap can usefully show anyway
+    if (error || seq !== requestSeq.current) return // stale response — a newer pan won
+    onRatings(data ?? [])
+  }, [map, onRatings])
+
+  useEffect(() => {
+    load()
+    const retry = setTimeout(() => {
+      map.invalidateSize()
+      load()
+    }, 150) // first paint can beat Leaflet's size measurement
+    return () => clearTimeout(retry)
+  }, [load, refreshKey, map])
+
+  useMapEvents({
+    moveend() {
+      load()
     },
   })
   return null
@@ -165,7 +211,8 @@ export default function MapPage() {
   const [origin, setOrigin] = useState<[number, number] | null>(null)
   const [destination, setDestination] = useState<[number, number] | null>(null)
   const [ratingPoint, setRatingPoint] = useState<[number, number] | null>(null)
-  const [ratings, setRatings] = useState<Rating[]>([])
+  const [ratings, setRatings] = useState<RatingPoint[]>([])
+  const [ratingsRefresh, setRatingsRefresh] = useState(0)
   const [crimeView, setCrimeView] = useState(false)
 
   // Resolve GPS before mounting the map — MapContainer's center is fixed at mount
@@ -180,16 +227,6 @@ export default function MapPage() {
       { timeout: 5000, maximumAge: 60000 }
     )
   }, [])
-
-  const loadRatings = useCallback(async () => {
-    // ponytail: loads all ratings; switch to viewport-bounded queries when rows grow
-    const { data } = await supabase.from('ratings').select('*')
-    setRatings(data ?? [])
-  }, [])
-
-  useEffect(() => {
-    loadRatings()
-  }, [loadRatings])
 
   // Empty start field → route from the user's current position
   const start = origin ?? userPos ?? center
@@ -223,6 +260,7 @@ export default function MapPage() {
           />
         )}
         <MapClickHandler onClick={(lat, lng) => setRatingPoint([lat, lng])} />
+        <RatingsLoader refreshKey={ratingsRefresh} onRatings={setRatings} />
         {crimeView ? <CrimeGlowLayer /> : <HeatmapLayer ratings={ratings} />}
         {userPos && <Marker position={userPos} icon={userIcon} />}
         {origin && <Marker position={origin} icon={startIcon} />}
@@ -291,7 +329,7 @@ export default function MapPage() {
           onClose={() => setRatingPoint(null)}
           onSaved={() => {
             setRatingPoint(null)
-            loadRatings()
+            setRatingsRefresh(k => k + 1)
           }}
         />
       )}

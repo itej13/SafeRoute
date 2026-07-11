@@ -4,7 +4,7 @@ import L from 'leaflet'
 import { supabase } from '../lib/supabase'
 import { haversine, formatDistance, formatDuration, findDistrict } from '../lib/geo'
 import { crimeForDistrict, type DistrictCrime } from '../lib/crimeData'
-import type { Rating, RouteData } from '../lib/types'
+import type { RatingPoint, RouteData } from '../lib/types'
 
 const RATE_HINT = 'Tap the map along a route to rate it — ratings sharpen the journey rating.'
 
@@ -22,16 +22,17 @@ interface OsrmRoute {
   geometry: { coordinates: [number, number][] } // [lng, lat]
 }
 
-async function fetchRatingsAround(routes: RouteData[]): Promise<Rating[]> {
+async function fetchRatingsAround(routes: RouteData[]): Promise<RatingPoint[]> {
   const lats = routes.flatMap(r => r.coords.map(c => c[0]))
   const lngs = routes.flatMap(r => r.coords.map(c => c[1]))
   const { data, error } = await supabase
     .from('ratings')
-    .select('*')
+    .select('id,lat,lng,score,utilities')
     .gte('lat', Math.min(...lats) - BBOX_BUFFER_DEG)
     .lte('lat', Math.max(...lats) + BBOX_BUFFER_DEG)
     .gte('lng', Math.min(...lngs) - BBOX_BUFFER_DEG)
     .lte('lng', Math.max(...lngs) + BBOX_BUFFER_DEG)
+    .limit(2000) // scoring saturates long before this; caps worst-case egress
   if (error) return []
   return data ?? []
 }
@@ -56,7 +57,7 @@ interface CrowdSignal {
 // Crowd signal from ratings within RATING_RADIUS_M of the route: average score,
 // plus the safety factor most often reported missing (needs ≥3 reports, <40% positive).
 // Coords are sampled — adjacent OSRM points are far closer than the radius.
-function crowdSignal(coords: [number, number][], ratings: Rating[]): CrowdSignal {
+function crowdSignal(coords: [number, number][], ratings: RatingPoint[]): CrowdSignal {
   const sampled = coords.filter((_, i) => i % 5 === 0)
   const near = ratings.filter(r =>
     sampled.some(([lat, lng]) => haversine(lat, lng, r.lat, r.lng) <= RATING_RADIUS_M)
@@ -69,7 +70,7 @@ function crowdSignal(coords: [number, number][], ratings: Rating[]): CrowdSignal
   if (near.length >= 3) {
     let worstShare = 0.4 // only flag factors under 40% positive
     for (const key of Object.keys(FACTOR_LABELS)) {
-      const positive = near.filter(r => r.utilities?.[key as keyof Rating['utilities']]).length
+      const positive = near.filter(r => r.utilities?.[key as keyof RatingPoint['utilities']]).length
       const share = positive / near.length
       if (share < worstShare) {
         worstShare = share

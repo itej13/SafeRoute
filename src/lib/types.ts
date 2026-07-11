@@ -21,6 +21,9 @@ export interface Rating {
   created_at: string
 }
 
+/** The slice of a rating the map and route scoring actually read — keeps queries light. */
+export type RatingPoint = Pick<Rating, 'id' | 'lat' | 'lng' | 'score' | 'utilities'>
+
 export interface EmergencyContact {
   id: string
   user_id: string
