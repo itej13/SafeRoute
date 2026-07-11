@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { MapContainer, TileLayer, Marker, Polygon, useMapEvents } from 'react-leaflet'
 import L from 'leaflet'
 import { supabase } from '../lib/supabase'
-import { fetchDelhiCrimeIndex, crimeForDistrict, type DistrictCrime } from '../lib/crimeData'
+import { crimeForDistrict } from '../lib/crimeData'
 import { findDistrict } from '../lib/geo'
 import districts from '../data/delhi-districts.json'
 import HeatmapLayer from '../components/HeatmapLayer'
@@ -48,11 +48,11 @@ function MapClickHandler({ onClick }: { onClick: (lat: number, lng: number) => v
 
 // Crime view: golden district patches on the dark basemap. Brightness follows the
 // NCRB crime count — the district-level truth of the dataset, no fake point precision.
-function CrimeGlowLayer({ crimeIndex }: { crimeIndex: Map<string, DistrictCrime> }) {
+function CrimeGlowLayer() {
   return (
     <>
       {districts.map(d => {
-        const crime = crimeForDistrict(crimeIndex, d.name)
+        const crime = crimeForDistrict(d.name)
         if (!crime) return null
         const intensity = 1 - crime.safetyIndex / 100 // 0 = calmest district, 1 = heaviest
         return d.rings.map((ring, i) => (
@@ -166,7 +166,6 @@ export default function MapPage() {
   const [destination, setDestination] = useState<[number, number] | null>(null)
   const [ratingPoint, setRatingPoint] = useState<[number, number] | null>(null)
   const [ratings, setRatings] = useState<Rating[]>([])
-  const [crimeIndex, setCrimeIndex] = useState<Map<string, DistrictCrime> | null>(null)
   const [crimeView, setCrimeView] = useState(false)
 
   // Resolve GPS before mounting the map — MapContainer's center is fixed at mount
@@ -190,16 +189,13 @@ export default function MapPage() {
 
   useEffect(() => {
     loadRatings()
-    fetchDelhiCrimeIndex().then(setCrimeIndex)
   }, [loadRatings])
 
   // Empty start field → route from the user's current position
   const start = origin ?? userPos ?? center
-  const { routes, loading: routesLoading } = useRouteComparison(start, destination, crimeIndex)
+  const { routes, loading: routesLoading } = useRouteComparison(start, destination)
 
-  const areaCrime = userPos
-    ? crimeForDistrict(crimeIndex, findDistrict(userPos[0], userPos[1]))
-    : null
+  const areaCrime = userPos ? crimeForDistrict(findDistrict(userPos[0], userPos[1])) : null
 
   if (!center) {
     return (
@@ -227,11 +223,7 @@ export default function MapPage() {
           />
         )}
         <MapClickHandler onClick={(lat, lng) => setRatingPoint([lat, lng])} />
-        {crimeView && crimeIndex ? (
-          <CrimeGlowLayer crimeIndex={crimeIndex} />
-        ) : (
-          <HeatmapLayer ratings={ratings} />
-        )}
+        {crimeView ? <CrimeGlowLayer /> : <HeatmapLayer ratings={ratings} />}
         {userPos && <Marker position={userPos} icon={userIcon} />}
         {origin && <Marker position={origin} icon={startIcon} />}
         {destination && <Marker position={destination} icon={destinationIcon} />}
@@ -252,18 +244,16 @@ export default function MapPage() {
         <AreaSafetyCard crime={areaCrime} />
       </div>
 
-      {crimeIndex && (
-        <button
-          data-no-map-click
-          onClick={() => setCrimeView(v => !v)}
-          aria-pressed={crimeView}
-          className={`absolute bottom-6 left-4 z-[1000] rounded-full px-4 py-2.5 text-xs font-semibold shadow-lg transition-colors ${
-            crimeView ? 'bg-lamp-400 text-night-900' : 'bg-night-800/95 text-mist-100 border border-night-600'
-          }`}
-        >
-          {crimeView ? 'Street view' : 'Crime map'}
-        </button>
-      )}
+      <button
+        data-no-map-click
+        onClick={() => setCrimeView(v => !v)}
+        aria-pressed={crimeView}
+        className={`absolute bottom-6 left-4 z-[1000] rounded-full px-4 py-2.5 text-xs font-semibold shadow-lg transition-colors ${
+          crimeView ? 'bg-lamp-400 text-night-900' : 'bg-night-800/95 text-mist-100 border border-night-600'
+        }`}
+      >
+        {crimeView ? 'Street view' : 'Crime map'}
+      </button>
       {crimeView && (
         <p
           data-no-map-click
@@ -271,6 +261,14 @@ export default function MapPage() {
         >
           Brighter gold = more reported crimes against women in that district. NCRB via
           data.gov.in, annual.
+        </p>
+      )}
+      {!destination && !ratingPoint && !crimeView && (
+        <p
+          data-no-map-click
+          className="pointer-events-none absolute bottom-20 left-4 z-[1000] max-w-52 rounded-lg bg-night-800/95 px-3 py-2 text-[11px] leading-snug text-mist-400"
+        >
+          Tap anywhere on the map to rate how safe that spot feels.
         </p>
       )}
       {!destination && !ratingPoint && <SOSButton />}

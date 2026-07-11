@@ -6,6 +6,8 @@ import { haversine, formatDistance, formatDuration, findDistrict } from '../lib/
 import { crimeForDistrict, type DistrictCrime } from '../lib/crimeData'
 import type { Rating, RouteData } from '../lib/types'
 
+const RATE_HINT = 'Tap the map along a route to rate it — ratings sharpen the journey rating.'
+
 // FOSSGIS public OSRM — real pedestrian routing, so ETAs are walking times
 // ponytail: community demo server; self-host OSRM if it ever rate-limits
 const OSRM_BASE = 'https://routing.openstreetmap.de/routed-foot/route/v1'
@@ -79,14 +81,10 @@ function crowdSignal(coords: [number, number][], ratings: Rating[]): CrowdSignal
 }
 
 // District base score: NCRB safety index (0–100) of districts the route touches, on a 1–5 scale
-function districtScore(
-  coords: [number, number][],
-  crimeIndex: Map<string, DistrictCrime> | null
-): number | null {
-  if (!crimeIndex) return null
+function districtScore(coords: [number, number][]): number | null {
   const probes = [coords[0], coords[Math.floor(coords.length / 2)], coords[coords.length - 1]]
   const indices = probes
-    .map(([lat, lng]) => crimeForDistrict(crimeIndex, findDistrict(lat, lng)))
+    .map(([lat, lng]) => crimeForDistrict(findDistrict(lat, lng)))
     .filter((c): c is DistrictCrime => c !== null)
     .map(c => c.safetyIndex)
   if (indices.length === 0) return null
@@ -102,8 +100,7 @@ function blend(crowd: number | null, district: number | null): number | null {
 // eslint-disable-next-line react-refresh/only-export-components
 export function useRouteComparison(
   origin: [number, number] | null,
-  destination: [number, number] | null,
-  crimeIndex: Map<string, DistrictCrime> | null
+  destination: [number, number] | null
 ) {
   const [routes, setRoutes] = useState<RouteData[]>([])
   const [loading, setLoading] = useState(false)
@@ -138,7 +135,7 @@ export function useRouteComparison(
           const crowd = crowdSignal(r.coords, ratings)
           return {
             ...r,
-            safetyScore: blend(crowd.score, districtScore(r.coords, crimeIndex)),
+            safetyScore: blend(crowd.score, districtScore(r.coords)),
             reportCount: crowd.reportCount,
             weakFactor: crowd.weakFactor,
           }
@@ -153,7 +150,7 @@ export function useRouteComparison(
     return () => {
       cancelled = true
     }
-  }, [origin, destination, crimeIndex])
+  }, [origin, destination])
 
   return { routes, loading }
 }
@@ -222,6 +219,8 @@ export function RouteSheet({ routes, loading, onClear }: SheetProps) {
       {loading ? (
         <p className="py-3 text-sm text-mist-400">Comparing routes…</p>
       ) : (
+        <>
+        <p className="mb-2 text-xs text-mist-400">{RATE_HINT}</p>
         <ul className="space-y-2">
           {routes.map((r, i) => (
             <li key={i} className="flex items-center gap-3 rounded-lg bg-night-700 px-3 py-2.5">
@@ -258,6 +257,7 @@ export function RouteSheet({ routes, loading, onClear }: SheetProps) {
             </li>
           ))}
         </ul>
+        </>
       )}
     </div>
   )

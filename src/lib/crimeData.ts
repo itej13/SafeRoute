@@ -1,10 +1,10 @@
-// Official NCRB district-wise crimes-against-women statistics for Delhi,
-// served by the data.gov.in open-data API. Annual data — the app labels it
-// as official statistics, never as real-time.
+// Official NCRB district-wise crimes-against-women statistics for Delhi (2015 —
+// the latest district-level year NCRB published via data.gov.in). The dataset is
+// annual and immutable, so it ships bundled: no API key, no runtime fetch.
+// Source: data.gov.in resource 5ec42b22-a627-4b90-b8b3-ffece84d44f4.
 
-const API_KEY = import.meta.env.VITE_DATA_GOV_IN_KEY as string | undefined
-const RESOURCE_ID = '5ec42b22-a627-4b90-b8b3-ffece84d44f4' // District/Area-wise crimes against women, NCRB
-const CACHE_KEY = 'saferoute:crime-index:v1'
+import crimeRows from '../data/delhi-crime-ncrb.json'
+import districts from '../data/delhi-districts.json'
 
 export interface DistrictCrime {
   district: string
@@ -18,84 +18,26 @@ export interface DistrictCrime {
 // Normalizing hyphens/case aligns the two ("North-East" → "north east").
 const normalize = (name: string) => name.toLowerCase().replace(/[-_]/g, ' ').trim()
 
-function isConfigured(): boolean {
-  return !!API_KEY && !API_KEY.startsWith('your-')
-}
+// Keep only rows that correspond to a mapped district boundary — the raw data also
+// contains police units (Crime Branch, SPUWAC, "Total District(s)"…) that would
+// otherwise distort the intensity scale.
+const knownDistricts = new Set(districts.map(d => normalize(d.name)))
 
-interface NcrbRecord {
-  district_area?: string
-  year?: string
-  [column: string]: string | undefined
-}
+const rows = crimeRows
+  .map(r => ({ ...r, district: normalize(r.district) }))
+  .filter(r => knownDistricts.has(r.district))
 
-// Sum every numeric crime column in a record (rape, dowry deaths, cruelty, …)
-function totalOf(record: NcrbRecord): number {
-  let total = 0
-  for (const [key, value] of Object.entries(record)) {
-    if (key === 'document_id' || key === 'year' || key === 'sl_no_') continue
-    const n = Number(value)
-    if (Number.isFinite(n)) total += n
-  }
-  return total
-}
+const max = Math.max(...rows.map(r => r.totalCrimes), 1)
 
-let inFlight: Promise<Map<string, DistrictCrime> | null> | null = null
+export const delhiCrimeIndex: Map<string, DistrictCrime> = new Map(
+  rows.map(r => [
+    r.district,
+    { ...r, safetyIndex: Math.round((1 - r.totalCrimes / max) * 100) },
+  ])
+)
 
-/**
- * District name (normalized) → crime stats for Delhi. Cached in sessionStorage.
- * Resolves null when the key is unset or the fetch fails — callers hide the
- * Area Safety feature in that case; nothing else depends on this.
- */
-export function fetchDelhiCrimeIndex(): Promise<Map<string, DistrictCrime> | null> {
-  if (!isConfigured()) return Promise.resolve(null)
-  if (inFlight) return inFlight
-
-  inFlight = (async () => {
-    try {
-      const cached = sessionStorage.getItem(CACHE_KEY)
-      if (cached) return new Map(JSON.parse(cached) as [string, DistrictCrime][])
-
-      const url =
-        `https://api.data.gov.in/resource/${RESOURCE_ID}` +
-        `?api-key=${API_KEY}&format=json&limit=50` +
-        `&filters%5Bstate_ut%5D=${encodeURIComponent('Delhi UT')}`
-      const res = await fetch(url)
-      if (!res.ok) return null
-      const data: { records?: NcrbRecord[] } = await res.json()
-      if (!data.records?.length) return null
-
-      const rows = data.records
-        .map(r => ({
-          district: normalize(r.district_area ?? ''),
-          totalCrimes: totalOf(r),
-          year: Number(r.year) || 0,
-        }))
-        .filter(r => r.district)
-      const max = Math.max(...rows.map(r => r.totalCrimes), 1)
-
-      const map = new Map<string, DistrictCrime>()
-      for (const row of rows) {
-        map.set(row.district, {
-          ...row,
-          safetyIndex: Math.round((1 - row.totalCrimes / max) * 100),
-        })
-      }
-      sessionStorage.setItem(CACHE_KEY, JSON.stringify([...map]))
-      return map
-    } catch {
-      return null // fail-soft: Area Safety simply doesn't render
-    } finally {
-      inFlight = null
-    }
-  })()
-  return inFlight
-}
-
-/** Stats for the district containing a normalized census-district name. */
-export function crimeForDistrict(
-  index: Map<string, DistrictCrime> | null,
-  districtName: string | null
-): DistrictCrime | null {
-  if (!index || !districtName) return null
-  return index.get(normalize(districtName)) ?? null
+/** Stats for a census-district name (as returned by findDistrict), or null. */
+export function crimeForDistrict(districtName: string | null): DistrictCrime | null {
+  if (!districtName) return null
+  return delhiCrimeIndex.get(normalize(districtName)) ?? null
 }
