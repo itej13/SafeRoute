@@ -10,10 +10,15 @@ interface RatingPanelProps {
   onSaved: () => void
 }
 
+// SafetiPin audit parameters, phrased as one-tap observations
 const utilityOptions: { key: keyof Utilities; label: string }[] = [
   { key: 'lighting', label: 'Well lit' },
-  { key: 'crowded', label: 'Busy area' },
-  { key: 'cctv', label: 'CCTV' },
+  { key: 'open', label: 'Open & visible' },
+  { key: 'people', label: 'People around' },
+  { key: 'women', label: 'Women around' },
+  { key: 'security', label: 'Police/guards' },
+  { key: 'walkpath', label: 'Good footpath' },
+  { key: 'transport', label: 'Transport nearby' },
 ]
 
 const scoreLabels = ['', 'Unsafe', 'Risky', 'Okay', 'Good', 'Very safe']
@@ -78,7 +83,7 @@ export default function RatingPanel({ lat, lng, onClose, onSaved }: RatingPanelP
       </div>
       <p className="mb-3 h-4 text-center text-xs text-mist-400">{scoreLabels[score]}</p>
 
-      <div className="mb-3 flex gap-2">
+      <div className="mb-3 flex flex-wrap gap-2">
         {utilityOptions.map(({ key, label }) => (
           <button
             key={key}

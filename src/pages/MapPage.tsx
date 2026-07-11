@@ -46,21 +46,26 @@ function MapClickHandler({ onClick }: { onClick: (lat: number, lng: number) => v
   return null
 }
 
-// District polygons tinted by NCRB crime index — the official-data layer of the map
-function CrimeOverlay({ crimeIndex }: { crimeIndex: Map<string, DistrictCrime> | null }) {
-  if (!crimeIndex) return null
+// Crime view: golden district patches on the dark basemap. Brightness follows the
+// NCRB crime count — the district-level truth of the dataset, no fake point precision.
+function CrimeGlowLayer({ crimeIndex }: { crimeIndex: Map<string, DistrictCrime> }) {
   return (
     <>
       {districts.map(d => {
         const crime = crimeForDistrict(crimeIndex, d.name)
         if (!crime) return null
-        const color =
-          crime.safetyIndex >= 60 ? '#3EC98E' : crime.safetyIndex >= 30 ? '#FFB648' : '#E4576B'
+        const intensity = 1 - crime.safetyIndex / 100 // 0 = calmest district, 1 = heaviest
         return d.rings.map((ring, i) => (
           <Polygon
             key={`${d.name}-${i}`}
             positions={ring.map(([lng, lat]) => [lat, lng] as [number, number])}
-            pathOptions={{ color, weight: 1, opacity: 0.5, fillColor: color, fillOpacity: 0.14 }}
+            pathOptions={{
+              color: '#FFB648',
+              weight: 1,
+              opacity: 0.25 + 0.5 * intensity,
+              fillColor: '#FFB648',
+              fillOpacity: 0.06 + 0.5 * intensity,
+            }}
             interactive={false}
           />
         ))
@@ -162,6 +167,7 @@ export default function MapPage() {
   const [ratingPoint, setRatingPoint] = useState<[number, number] | null>(null)
   const [ratings, setRatings] = useState<Rating[]>([])
   const [crimeIndex, setCrimeIndex] = useState<Map<string, DistrictCrime> | null>(null)
+  const [crimeView, setCrimeView] = useState(false)
 
   // Resolve GPS before mounting the map — MapContainer's center is fixed at mount
   useEffect(() => {
@@ -207,13 +213,25 @@ export default function MapPage() {
   return (
     <div className="relative h-full">
       <MapContainer center={center} zoom={15} zoomControl={false} className="h-full">
-        <TileLayer
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-          url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
-        />
+        {crimeView ? (
+          <TileLayer
+            key="dark"
+            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
+            url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"
+          />
+        ) : (
+          <TileLayer
+            key="street"
+            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+            url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+          />
+        )}
         <MapClickHandler onClick={(lat, lng) => setRatingPoint([lat, lng])} />
-        <CrimeOverlay crimeIndex={crimeIndex} />
-        <HeatmapLayer ratings={ratings} />
+        {crimeView && crimeIndex ? (
+          <CrimeGlowLayer crimeIndex={crimeIndex} />
+        ) : (
+          <HeatmapLayer ratings={ratings} />
+        )}
         {userPos && <Marker position={userPos} icon={userIcon} />}
         {origin && <Marker position={origin} icon={startIcon} />}
         {destination && <Marker position={destination} icon={destinationIcon} />}
@@ -233,6 +251,28 @@ export default function MapPage() {
       <div className="pointer-events-none absolute left-4 top-28 z-[1000]">
         <AreaSafetyCard crime={areaCrime} />
       </div>
+
+      {crimeIndex && (
+        <button
+          data-no-map-click
+          onClick={() => setCrimeView(v => !v)}
+          aria-pressed={crimeView}
+          className={`absolute bottom-6 left-4 z-[1000] rounded-full px-4 py-2.5 text-xs font-semibold shadow-lg transition-colors ${
+            crimeView ? 'bg-lamp-400 text-night-900' : 'bg-night-800/95 text-mist-100 border border-night-600'
+          }`}
+        >
+          {crimeView ? 'Street view' : 'Crime map'}
+        </button>
+      )}
+      {crimeView && (
+        <p
+          data-no-map-click
+          className="absolute bottom-20 left-4 z-[1000] max-w-56 rounded-lg bg-night-800/95 px-3 py-2 text-[10px] leading-snug text-mist-400"
+        >
+          Brighter gold = more reported crimes against women in that district. NCRB via
+          data.gov.in, annual.
+        </p>
+      )}
       {!destination && !ratingPoint && <SOSButton />}
 
       {ratingPoint && (

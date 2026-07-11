@@ -6,10 +6,10 @@ import { haversine, formatDistance, formatDuration, findDistrict } from '../lib/
 import { crimeForDistrict, type DistrictCrime } from '../lib/crimeData'
 import type { Rating, RouteData } from '../lib/types'
 
-const OSRM_BASE = 'https://router.project-osrm.org/route/v1'
-// ponytail: public OSRM only serves the driving profile; point at a self-hosted
-// instance with a foot profile for true walking routes
-const PROFILE = 'driving'
+// FOSSGIS public OSRM — real pedestrian routing, so ETAs are walking times
+// ponytail: community demo server; self-host OSRM if it ever rate-limits
+const OSRM_BASE = 'https://routing.openstreetmap.de/routed-foot/route/v1'
+const PROFILE = 'foot'
 
 const RATING_RADIUS_M = 250
 const BBOX_BUFFER_DEG = 0.0025 // ≈ 250 m, keeps edge ratings inside the single query
@@ -34,15 +34,48 @@ async function fetchRatingsAround(routes: RouteData[]): Promise<Rating[]> {
   return data ?? []
 }
 
-// Crowd score: average of ratings within RATING_RADIUS_M of the route.
+// SafetiPin audit parameters as reported along the route; the label names the problem
+const FACTOR_LABELS: Record<string, string> = {
+  lighting: 'poor lighting',
+  open: 'low visibility',
+  people: 'deserted stretches',
+  women: 'few women around',
+  security: 'no security presence',
+  walkpath: 'poor footpaths',
+  transport: 'no transport nearby',
+}
+
+interface CrowdSignal {
+  score: number | null
+  reportCount: number
+  weakFactor: string | null
+}
+
+// Crowd signal from ratings within RATING_RADIUS_M of the route: average score,
+// plus the safety factor most often reported missing (needs ≥3 reports, <40% positive).
 // Coords are sampled — adjacent OSRM points are far closer than the radius.
-function crowdScore(coords: [number, number][], ratings: Rating[]): number | null {
+function crowdSignal(coords: [number, number][], ratings: Rating[]): CrowdSignal {
   const sampled = coords.filter((_, i) => i % 5 === 0)
   const near = ratings.filter(r =>
     sampled.some(([lat, lng]) => haversine(lat, lng, r.lat, r.lng) <= RATING_RADIUS_M)
   )
-  if (near.length === 0) return null
-  return near.reduce((sum, r) => sum + r.score, 0) / near.length
+  if (near.length === 0) return { score: null, reportCount: 0, weakFactor: null }
+
+  const score = near.reduce((sum, r) => sum + r.score, 0) / near.length
+
+  let weakFactor: string | null = null
+  if (near.length >= 3) {
+    let worstShare = 0.4 // only flag factors under 40% positive
+    for (const key of Object.keys(FACTOR_LABELS)) {
+      const positive = near.filter(r => r.utilities?.[key as keyof Rating['utilities']]).length
+      const share = positive / near.length
+      if (share < worstShare) {
+        worstShare = share
+        weakFactor = FACTOR_LABELS[key]
+      }
+    }
+  }
+  return { score, reportCount: near.length, weakFactor }
 }
 
 // District base score: NCRB safety index (0–100) of districts the route touches, on a 1–5 scale
@@ -95,14 +128,21 @@ export function useRouteComparison(
           distanceMeters: r.distance,
           durationSeconds: r.duration,
           safetyScore: null,
+          reportCount: 0,
+          weakFactor: null,
         }))
         if (base.length === 0) throw new Error('no routes')
 
         const ratings = await fetchRatingsAround(base)
-        const scored = base.map(r => ({
-          ...r,
-          safetyScore: blend(crowdScore(r.coords, ratings), districtScore(r.coords, crimeIndex)),
-        }))
+        const scored = base.map(r => {
+          const crowd = crowdSignal(r.coords, ratings)
+          return {
+            ...r,
+            safetyScore: blend(crowd.score, districtScore(r.coords, crimeIndex)),
+            reportCount: crowd.reportCount,
+            weakFactor: crowd.weakFactor,
+          }
+        })
         if (!cancelled) setRoutes(scored)
       } catch {
         if (!cancelled) setRoutes([])
@@ -191,13 +231,17 @@ export function RouteSheet({ routes, loading, onClear }: SheetProps) {
               />
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-medium">
-                  {formatDistance(r.distanceMeters)} · {formatDuration(r.durationSeconds)}
+                  {formatDistance(r.distanceMeters)} · {formatDuration(r.durationSeconds)} walk
                 </p>
                 <p className="text-xs text-mist-400">
                   {r.safetyScore !== null
-                    ? `Safety ${r.safetyScore.toFixed(1)}/5`
+                    ? `Journey rating ${r.safetyScore.toFixed(1)}/5` +
+                      (r.reportCount > 0 ? ` · ${r.reportCount} report${r.reportCount > 1 ? 's' : ''}` : ' · district data')
                     : 'No safety data yet — be the first to rate this area'}
                 </p>
+                {r.weakFactor && (
+                  <p className="text-xs text-risk">Often reported: {r.weakFactor}</p>
+                )}
               </div>
               <div className="flex gap-1">
                 {i === safestIdx && routes.length > 1 && (

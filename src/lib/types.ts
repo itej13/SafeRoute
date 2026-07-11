@@ -1,7 +1,13 @@
+// SafetiPin safety-audit parameters (Lighting, Openness+Visibility, Crowd,
+// Gender Diversity, Security, Walkpath, Public Transport); "Feeling" is the 1–5 score
 export interface Utilities {
   lighting?: boolean
-  crowded?: boolean
-  cctv?: boolean
+  open?: boolean
+  people?: boolean
+  women?: boolean
+  security?: boolean
+  walkpath?: boolean
+  transport?: boolean
 }
 
 export interface Rating {
@@ -38,5 +44,7 @@ export interface RouteData {
   coords: [number, number][] // [lat, lng]
   distanceMeters: number
   durationSeconds: number
-  safetyScore: number | null // 1–5, null when no signal available
+  safetyScore: number | null // 1–5 journey rating, null when no signal available
+  reportCount: number // crowd ratings near this route
+  weakFactor: string | null // most-reported missing safety factor, e.g. "poor lighting"
 }
