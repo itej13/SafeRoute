@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { MapContainer, TileLayer, Marker, useMap, useMapEvents } from 'react-leaflet'
+import { MapContainer, TileLayer, Marker, Polygon, useMapEvents } from 'react-leaflet'
 import L from 'leaflet'
 import { supabase } from '../lib/supabase'
 import { fetchDelhiCrimeIndex, crimeForDistrict, type DistrictCrime } from '../lib/crimeData'
 import { findDistrict } from '../lib/geo'
+import districts from '../data/delhi-districts.json'
 import HeatmapLayer from '../components/HeatmapLayer'
 import RatingPanel from '../components/RatingPanel'
 import AreaSafetyCard from '../components/AreaSafetyCard'
@@ -18,6 +19,13 @@ const userIcon = L.divIcon({
   className: '',
   iconSize: [18, 18],
   iconAnchor: [9, 9],
+})
+
+const startIcon = L.divIcon({
+  html: '<div style="width:16px;height:16px;background:#3EC98E;border:3px solid white;border-radius:50%;box-shadow:0 2px 6px rgba(0,0,0,.4)"></div>',
+  className: '',
+  iconSize: [16, 16],
+  iconAnchor: [8, 8],
 })
 
 const destinationIcon = L.divIcon({
@@ -38,21 +46,49 @@ function MapClickHandler({ onClick }: { onClick: (lat: number, lng: number) => v
   return null
 }
 
-function SearchBar({
-  center,
-  onSelect,
-}: {
+// District polygons tinted by NCRB crime index — the official-data layer of the map
+function CrimeOverlay({ crimeIndex }: { crimeIndex: Map<string, DistrictCrime> | null }) {
+  if (!crimeIndex) return null
+  return (
+    <>
+      {districts.map(d => {
+        const crime = crimeForDistrict(crimeIndex, d.name)
+        if (!crime) return null
+        const color =
+          crime.safetyIndex >= 60 ? '#3EC98E' : crime.safetyIndex >= 30 ? '#FFB648' : '#E4576B'
+        return d.rings.map((ring, i) => (
+          <Polygon
+            key={`${d.name}-${i}`}
+            positions={ring.map(([lng, lat]) => [lat, lng] as [number, number])}
+            pathOptions={{ color, weight: 1, opacity: 0.5, fillColor: color, fillOpacity: 0.14 }}
+            interactive={false}
+          />
+        ))
+      })}
+    </>
+  )
+}
+
+const labelOf = (f: PhotonFeature) =>
+  [f.properties.name, f.properties.street, f.properties.city].filter(Boolean).join(', ')
+
+interface SearchFieldProps {
+  placeholder: string
   center: [number, number]
-  onSelect: (lat: number, lng: number) => void
-}) {
-  const map = useMap()
+  /** null means "cleared" — caller decides the fallback */
+  onPick: (point: [number, number] | null) => void
+}
+
+function SearchField({ placeholder, center, onPick }: SearchFieldProps) {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<PhotonFeature[]>([])
+  const [picked, setPicked] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
 
   useEffect(() => {
-    const q = query.trim()
-    if (q.length < 3) {
+    if (picked) return // the input holds a chosen label; don't search it again
+    const q = query.trim().replace(/\s+/g, ' ')
+    if (q.length < 2) {
       setResults([])
       return
     }
@@ -61,8 +97,10 @@ function SearchBar({
       const controller = new AbortController()
       abortRef.current = controller
       try {
+        // lang=en + strong location bias: partial names rank Delhi results first
         const res = await fetch(
-          `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=5&lat=${center[0]}&lon=${center[1]}`,
+          `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=6&lang=en` +
+            `&lat=${center[0]}&lon=${center[1]}&zoom=12&location_bias_scale=0.4`,
           { signal: controller.signal }
         )
         if (!res.ok) return
@@ -71,34 +109,37 @@ function SearchBar({
       } catch {
         // aborted or offline — keep previous results
       }
-    }, 300)
+    }, 250)
     return () => clearTimeout(timer)
-  }, [query, center])
+  }, [query, center, picked])
 
   const pick = (f: PhotonFeature) => {
     const [lng, lat] = f.geometry.coordinates
-    setQuery('')
+    setQuery(labelOf(f))
+    setPicked(true)
     setResults([])
-    map.flyTo([lat, lng], 15, { duration: 1 })
-    onSelect(lat, lng)
+    onPick([lat, lng])
   }
 
-  const labelOf = (f: PhotonFeature) =>
-    [f.properties.name, f.properties.street, f.properties.city].filter(Boolean).join(', ')
+  const change = (value: string) => {
+    setQuery(value)
+    setPicked(false)
+    if (value.trim() === '') onPick(null)
+  }
 
   return (
-    <div data-no-map-click className="absolute inset-x-4 top-4 z-[1000] ml-auto max-w-md">
+    <div>
       <input
         value={query}
-        onChange={e => setQuery(e.target.value)}
-        placeholder="Where to?"
-        aria-label="Search destination"
-        className="w-full rounded-xl border border-night-600 bg-night-800/95 px-4 py-3 text-sm shadow-lg placeholder:text-mist-400 focus:border-lamp-400 focus:outline-none"
+        onChange={e => change(e.target.value)}
+        placeholder={placeholder}
+        aria-label={placeholder}
+        className="w-full rounded-xl border border-night-600 bg-night-800/95 px-4 py-2.5 text-sm shadow-lg placeholder:text-mist-400 focus:border-lamp-400 focus:outline-none"
       />
       {results.length > 0 && (
         <ul className="mt-1 overflow-hidden rounded-xl border border-night-600 bg-night-800 shadow-lg">
-          {results.map(f => (
-            <li key={f.properties.osm_id}>
+          {results.map((f, i) => (
+            <li key={`${f.properties.osm_id}-${i}`}>
               <button
                 onClick={() => pick(f)}
                 className="w-full px-4 py-2.5 text-left text-sm hover:bg-night-700"
@@ -116,6 +157,7 @@ function SearchBar({
 export default function MapPage() {
   const [userPos, setUserPos] = useState<[number, number] | null>(null)
   const [center, setCenter] = useState<[number, number] | null>(null)
+  const [origin, setOrigin] = useState<[number, number] | null>(null)
   const [destination, setDestination] = useState<[number, number] | null>(null)
   const [ratingPoint, setRatingPoint] = useState<[number, number] | null>(null)
   const [ratings, setRatings] = useState<Rating[]>([])
@@ -145,8 +187,9 @@ export default function MapPage() {
     fetchDelhiCrimeIndex().then(setCrimeIndex)
   }, [loadRatings])
 
-  // Route origin falls back to map center so search still works without GPS
-  const { routes, loading: routesLoading } = useRouteComparison(userPos ?? center, destination, crimeIndex)
+  // Empty start field → route from the user's current position
+  const start = origin ?? userPos ?? center
+  const { routes, loading: routesLoading } = useRouteComparison(start, destination, crimeIndex)
 
   const areaCrime = userPos
     ? crimeForDistrict(crimeIndex, findDistrict(userPos[0], userPos[1]))
@@ -169,15 +212,27 @@ export default function MapPage() {
           url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
         <MapClickHandler onClick={(lat, lng) => setRatingPoint([lat, lng])} />
-        <SearchBar center={center} onSelect={(lat, lng) => setDestination([lat, lng])} />
+        <CrimeOverlay crimeIndex={crimeIndex} />
         <HeatmapLayer ratings={ratings} />
         {userPos && <Marker position={userPos} icon={userIcon} />}
+        {origin && <Marker position={origin} icon={startIcon} />}
         {destination && <Marker position={destination} icon={destinationIcon} />}
         {ratingPoint && <Marker position={ratingPoint} icon={destinationIcon} />}
         <RoutePolylines routes={routes} />
       </MapContainer>
 
-      <AreaSafetyCard crime={areaCrime} />
+      <div data-no-map-click className="absolute inset-x-4 top-4 z-[1000] ml-auto max-w-md space-y-1.5">
+        <SearchField
+          placeholder="Start — your location"
+          center={center}
+          onPick={setOrigin}
+        />
+        <SearchField placeholder="Where to?" center={center} onPick={setDestination} />
+      </div>
+
+      <div className="pointer-events-none absolute left-4 top-28 z-[1000]">
+        <AreaSafetyCard crime={areaCrime} />
+      </div>
       {!destination && !ratingPoint && <SOSButton />}
 
       {ratingPoint && (
