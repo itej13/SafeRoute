@@ -2,12 +2,17 @@ import { useEffect, useRef } from 'react'
 import { useMap } from 'react-leaflet'
 import L from 'leaflet'
 import 'leaflet.heat'
-import type { RatingPoint } from '../lib/types'
+import type { HeatCell } from '../lib/types'
 
-// Weight: low safety score = hot spot. Score 1 → 1.0, score 5 → 0.2.
-const toPoint = (r: RatingPoint): [number, number, number] => [r.lat, r.lng, (6 - r.score) / 5]
+// Weight: low average score = hot spot, scaled up (capped) by report density.
+// Score 1 → 1.0, score 5 → 0.2; 5+ reports in a cell doubles its presence.
+const toPoint = (c: HeatCell): [number, number, number] => [
+  c.lat,
+  c.lng,
+  ((6 - c.avg_score) / 5) * (1 + Math.min(c.cnt, 5) / 5),
+]
 
-export default function HeatmapLayer({ ratings }: { ratings: RatingPoint[] }) {
+export default function HeatmapLayer({ cells }: { cells: HeatCell[] }) {
   const map = useMap()
   const layerRef = useRef<L.HeatLayer | null>(null)
 
@@ -42,8 +47,8 @@ export default function HeatmapLayer({ ratings }: { ratings: RatingPoint[] }) {
   }, [map])
 
   useEffect(() => {
-    layerRef.current?.setLatLngs(ratings.map(toPoint))
-  }, [ratings])
+    layerRef.current?.setLatLngs(cells.map(toPoint))
+  }, [cells])
 
   return null
 }

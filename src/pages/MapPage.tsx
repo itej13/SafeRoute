@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { MapContainer, TileLayer, Marker, Polygon, useMap, useMapEvents } from 'react-leaflet'
 import L from 'leaflet'
 import { supabase } from '../lib/supabase'
+import { TILE_URL, TILE_URL_DARK, TILE_ATTRIBUTION, PHOTON_URL } from '../lib/config'
 import { crimeForDistrict } from '../lib/crimeData'
 import { findDistrict } from '../lib/geo'
 import districts from '../data/delhi-districts.json'
@@ -10,7 +11,7 @@ import RatingPanel from '../components/RatingPanel'
 import AreaSafetyCard from '../components/AreaSafetyCard'
 import SOSButton from '../components/SOSButton'
 import { useRouteComparison, RoutePolylines, RouteSheet } from '../components/RouteComparison'
-import type { PhotonFeature, RatingPoint } from '../lib/types'
+import type { HeatCell, PhotonFeature } from '../lib/types'
 
 const DELHI_CENTER: [number, number] = [28.6139, 77.209]
 
@@ -46,14 +47,14 @@ function MapClickHandler({ onClick }: { onClick: (lat: number, lng: number) => v
   return null
 }
 
-// Loads only the ratings inside the (padded) viewport and refetches as the map
-// moves — per-user egress stays O(what's on screen), not O(table size).
+// Loads pre-aggregated heatmap cells for the (padded) viewport and refetches as
+// the map moves — per-user egress is O(visible grid cells), not O(table size).
 function RatingsLoader({
   refreshKey,
-  onRatings,
+  onCells,
 }: {
   refreshKey: number
-  onRatings: (ratings: RatingPoint[]) => void
+  onCells: (cells: HeatCell[]) => void
 }) {
   const map = useMap()
   const requestSeq = useRef(0)
@@ -63,17 +64,15 @@ function RatingsLoader({
     const b = map.getBounds().pad(0.2)
     // Zero-area bounds = container not laid out yet; the deferred retry below refires
     if (b.getSouth() === b.getNorth()) return
-    const { data, error } = await supabase
-      .from('ratings')
-      .select('id,lat,lng,score,utilities')
-      .gte('lat', b.getSouth())
-      .lte('lat', b.getNorth())
-      .gte('lng', b.getWest())
-      .lte('lng', b.getEast())
-      .limit(2500) // more points than a heatmap can usefully show anyway
+    const { data, error } = await supabase.rpc('heatmap_cells', {
+      min_lat: b.getSouth(),
+      max_lat: b.getNorth(),
+      min_lng: b.getWest(),
+      max_lng: b.getEast(),
+    })
     if (error || seq !== requestSeq.current) return // stale response — a newer pan won
-    onRatings(data ?? [])
-  }, [map, onRatings])
+    onCells(data ?? [])
+  }, [map, onCells])
 
   useEffect(() => {
     load()
@@ -150,9 +149,9 @@ function SearchField({ placeholder, center, onPick }: SearchFieldProps) {
       try {
         // lang=en + strong location bias: partial names rank Delhi results first
         const res = await fetch(
-          `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=6&lang=en` +
+          `${PHOTON_URL}/api/?q=${encodeURIComponent(q)}&limit=6&lang=en` +
             `&lat=${center[0]}&lon=${center[1]}&zoom=12&location_bias_scale=0.4`,
-          { signal: controller.signal }
+          { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(8000)]) }
         )
         if (!res.ok) return
         const data: { features?: PhotonFeature[] } = await res.json()
@@ -211,7 +210,7 @@ export default function MapPage() {
   const [origin, setOrigin] = useState<[number, number] | null>(null)
   const [destination, setDestination] = useState<[number, number] | null>(null)
   const [ratingPoint, setRatingPoint] = useState<[number, number] | null>(null)
-  const [ratings, setRatings] = useState<RatingPoint[]>([])
+  const [heatCells, setHeatCells] = useState<HeatCell[]>([])
   const [ratingsRefresh, setRatingsRefresh] = useState(0)
   const [crimeView, setCrimeView] = useState(false)
 
@@ -247,21 +246,13 @@ export default function MapPage() {
     <div className="relative h-full">
       <MapContainer center={center} zoom={15} zoomControl={false} className="h-full">
         {crimeView ? (
-          <TileLayer
-            key="dark"
-            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
-            url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"
-          />
+          <TileLayer key="dark" attribution={TILE_ATTRIBUTION} url={TILE_URL_DARK} />
         ) : (
-          <TileLayer
-            key="street"
-            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-            url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
-          />
+          <TileLayer key="street" attribution={TILE_ATTRIBUTION} url={TILE_URL} />
         )}
         <MapClickHandler onClick={(lat, lng) => setRatingPoint([lat, lng])} />
-        <RatingsLoader refreshKey={ratingsRefresh} onRatings={setRatings} />
-        {crimeView ? <CrimeGlowLayer /> : <HeatmapLayer ratings={ratings} />}
+        <RatingsLoader refreshKey={ratingsRefresh} onCells={setHeatCells} />
+        {crimeView ? <CrimeGlowLayer /> : <HeatmapLayer cells={heatCells} />}
         {userPos && <Marker position={userPos} icon={userIcon} />}
         {origin && <Marker position={origin} icon={startIcon} />}
         {destination && <Marker position={destination} icon={destinationIcon} />}

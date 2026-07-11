@@ -24,6 +24,14 @@ export interface Rating {
 /** The slice of a rating the map and route scoring actually read — keeps queries light. */
 export type RatingPoint = Pick<Rating, 'id' | 'lat' | 'lng' | 'score' | 'utilities'>
 
+/** One ~150 m grid cell from the heatmap_cells RPC. */
+export interface HeatCell {
+  lat: number
+  lng: number
+  avg_score: number
+  cnt: number
+}
+
 export interface EmergencyContact {
   id: string
   user_id: string

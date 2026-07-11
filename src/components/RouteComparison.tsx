@@ -2,16 +2,12 @@ import { useEffect, useState } from 'react'
 import { Polyline, useMap } from 'react-leaflet'
 import L from 'leaflet'
 import { supabase } from '../lib/supabase'
+import { OSRM_URL } from '../lib/config'
 import { haversine, formatDistance, formatDuration, findDistrict } from '../lib/geo'
 import { crimeForDistrict, type DistrictCrime } from '../lib/crimeData'
 import type { RatingPoint, RouteData } from '../lib/types'
 
 const RATE_HINT = 'Tap the map along a route to rate it — ratings sharpen the journey rating.'
-
-// FOSSGIS public OSRM — real pedestrian routing, so ETAs are walking times
-// ponytail: community demo server; self-host OSRM if it ever rate-limits
-const OSRM_BASE = 'https://routing.openstreetmap.de/routed-foot/route/v1'
-const PROFILE = 'foot'
 
 const RATING_RADIUS_M = 250
 const BBOX_BUFFER_DEG = 0.0025 // ≈ 250 m, keeps edge ratings inside the single query
@@ -116,9 +112,9 @@ export function useRouteComparison(
     ;(async () => {
       try {
         const url =
-          `${OSRM_BASE}/${PROFILE}/${origin[1]},${origin[0]};${destination[1]},${destination[0]}` +
+          `${OSRM_URL}/${origin[1]},${origin[0]};${destination[1]},${destination[0]}` +
           `?alternatives=true&overview=full&geometries=geojson`
-        const res = await fetch(url)
+        const res = await fetch(url, { signal: AbortSignal.timeout(8000) })
         if (!res.ok) throw new Error(`OSRM ${res.status}`)
         const data: { routes?: OsrmRoute[] } = await res.json()
         const base: RouteData[] = (data.routes ?? []).map(r => ({

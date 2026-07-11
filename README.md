@@ -35,5 +35,9 @@ Postgres, RLS) · OSRM routing · Photon geocoding · NCRB data via data.gov.in
 ## Notes
 
 - Routing uses the FOSSGIS public OSRM foot profile — walking routes and walking ETAs.
+- Map tiles, routing, and geocoding endpoints are all overridable via env
+  (`VITE_TILE_URL`, `VITE_TILE_URL_DARK`, `VITE_TILE_ATTRIBUTION`, `VITE_OSRM_URL`,
+  `VITE_PHOTON_URL` — see `.env.example`), so moving to commercial or self-hosted
+  providers at scale is a config change, not a code change.
 - Crime statistics are district-level and annual (NCRB 2015 via data.gov.in, bundled as
   static JSON in `src/data/`). They are a baseline signal; crowd ratings are the live layer.
