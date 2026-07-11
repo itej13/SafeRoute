@@ -255,13 +255,24 @@ export default function MapPage() {
         {crimeView ? 'Street view' : 'Crime map'}
       </button>
       {crimeView && (
-        <p
+        <div
           data-no-map-click
-          className="absolute bottom-20 left-4 z-[1000] max-w-56 rounded-lg bg-night-800/95 px-3 py-2 text-[10px] leading-snug text-mist-400"
+          className="pointer-events-none absolute bottom-24 right-4 z-[1000] w-44 rounded-lg bg-night-800/95 px-3 py-2.5 shadow-lg"
         >
-          Brighter gold = more reported crimes against women in that district. NCRB via
-          data.gov.in, annual.
-        </p>
+          <div
+            className="h-2 rounded-full"
+            style={{
+              background: 'linear-gradient(to right, rgba(255,182,72,0.08), rgba(255,182,72,0.95))',
+            }}
+          />
+          <div className="mt-1 flex justify-between text-[10px] text-mist-400">
+            <span>Fewer crimes</span>
+            <span>More</span>
+          </div>
+          <p className="mt-1 text-[9px] leading-snug text-mist-400">
+            Reported crimes against women per district · NCRB 2015
+          </p>
+        </div>
       )}
       {!destination && !ratingPoint && !crimeView && (
         <p
