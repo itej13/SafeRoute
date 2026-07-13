@@ -1,8 +1,29 @@
+<div align="center">
+
 # SafeRoute
 
-A mobile-first safety map of Delhi. Rate how safe a street feels, see the city as a safety
-heatmap, compare routes by safety as well as speed, and share your location with trusted
-contacts in one tap.
+**Walk the lit path.** A mobile-first women's safety map of Delhi — rate how safe a street feels,
+see the city as a live safety heatmap, compare routes by *safety* as well as speed, and share
+your location with trusted contacts in one tap.
+
+[![Live Demo](https://img.shields.io/badge/Live_Demo-saferoute--eosin.vercel.app-000000?style=for-the-badge&logo=vercel&logoColor=white)](https://saferoute-eosin.vercel.app)
+
+[![React](https://img.shields.io/badge/React_18-20232A?style=for-the-badge&logo=react&logoColor=61DAFB)](https://react.dev)
+[![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org)
+[![Supabase](https://img.shields.io/badge/Supabase-3ECF8E?style=for-the-badge&logo=supabase&logoColor=white)](https://supabase.com)
+[![Leaflet](https://img.shields.io/badge/Leaflet-199900?style=for-the-badge&logo=leaflet&logoColor=white)](https://leafletjs.com)
+
+</div>
+
+---
+
+## Why I built this
+
+"Is this route safe?" is a question maps don't answer — they optimize for *fastest*, not *safest*.
+SafeRoute treats safety as a first-class routing signal by fusing two data layers: **official NCRB
+crime statistics** for the baseline, and **crowd-sourced street-level ratings** for what the data
+misses — lighting, crowds, CCTV, the things you only know by being there. Every walking route is
+scored on both, so "safest" and "fastest" sit side by side and the choice is yours.
 
 ## Features
 
